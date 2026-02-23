@@ -1,4 +1,4 @@
-package com.example.dgmon
+package com.eunoiastudio.dgmon
 
 import io.flutter.embedding.android.FlutterActivity
 
