@@ -498,251 +498,6 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
     );
   }
 
-  Future<void> _openCashSettings() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: context.cardBackground,
-      builder: (BuildContext sheetContext) {
-        return StatefulBuilder(
-          builder:
-              (
-                BuildContext modalContext,
-                void Function(void Function()) setModalState,
-              ) {
-                return Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    20,
-                    20,
-                    20,
-                    MediaQuery.of(modalContext).viewInsets.bottom + 20,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: <Widget>[
-                          Text(
-                            'Pengaturan Kas',
-                            style: Theme.of(modalContext).textTheme.titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w700),
-                          ),
-                          IconButton(
-                            onPressed: () => Navigator.of(sheetContext).pop(),
-                            icon: const Icon(Icons.close),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxHeight: 260),
-                        child: _cashAccounts.isEmpty
-                            ? Center(
-                                child: Text(
-                                  'Belum ada akun kas.',
-                                  style: Theme.of(modalContext)
-                                      .textTheme
-                                      .bodyMedium
-                                      ?.copyWith(color: context.mutedText),
-                                ),
-                              )
-                            : ListView.builder(
-                                shrinkWrap: true,
-                                itemCount: _cashAccounts.length,
-                                itemBuilder: (BuildContext context, int index) {
-                                  final _CashAccount account =
-                                      _cashAccounts[index];
-                                  return ListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    title: Text(account.name),
-                                    subtitle: Text(
-                                      'Saldo awal ${_formatWholeCurrency(account.openingBalance)}',
-                                    ),
-                                    trailing: IconButton(
-                                      icon: const Icon(Icons.delete_outline),
-                                      onPressed: () {
-                                        if (_cashAccounts.length == 1) {
-                                          _showSnack(
-                                            'Minimal harus ada satu akun kas.',
-                                          );
-                                          return;
-                                        }
-
-                                        final bool hasTransaction =
-                                            _transactions.any(
-                                              (_TransactionData transaction) =>
-                                                  transaction.account ==
-                                                  account.name,
-                                            );
-                                        if (hasTransaction) {
-                                          _showSnack(
-                                            'Akun ini sudah dipakai transaksi dan tidak bisa dihapus.',
-                                          );
-                                          return;
-                                        }
-
-                                        setState(() {
-                                          _cashAccounts.removeAt(index);
-                                          _persistState();
-                                        });
-                                        setModalState(() {});
-                                      },
-                                    ),
-                                  );
-                                },
-                              ),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: <Widget>[
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: () {
-                                Navigator.of(sheetContext).pop();
-                                _openCategorySettings();
-                              },
-                              icon: const Icon(Icons.category_outlined),
-                              label: const Text('Kategori'),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: FilledButton.icon(
-                              onPressed: () async {
-                                final _CashAccount? newAccount =
-                                    await _showCreateCashAccountDialog();
-                                if (newAccount == null) {
-                                  return;
-                                }
-
-                                setState(() {
-                                  _cashAccounts.add(newAccount);
-                                  _persistState();
-                                });
-                                setModalState(() {});
-                              },
-                              icon: const Icon(Icons.add),
-                              label: const Text('Tambah'),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                );
-              },
-        );
-      },
-    );
-  }
-
-  Future<void> _openCategorySettings() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: context.cardBackground,
-      builder: (BuildContext sheetContext) {
-        return StatefulBuilder(
-          builder:
-              (
-                BuildContext modalContext,
-                void Function(void Function()) setModalState,
-              ) {
-                return Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    20,
-                    20,
-                    20,
-                    MediaQuery.of(modalContext).viewInsets.bottom + 20,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: <Widget>[
-                          Text(
-                            'Pengaturan Kategori',
-                            style: Theme.of(modalContext).textTheme.titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w700),
-                          ),
-                          IconButton(
-                            onPressed: () => Navigator.of(sheetContext).pop(),
-                            icon: const Icon(Icons.close),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxHeight: 260),
-                        child: _categories.isEmpty
-                            ? Center(
-                                child: Text(
-                                  'Belum ada kategori.',
-                                  style: Theme.of(modalContext)
-                                      .textTheme
-                                      .bodyMedium
-                                      ?.copyWith(color: context.mutedText),
-                                ),
-                              )
-                            : ListView.builder(
-                                shrinkWrap: true,
-                                itemCount: _categories.length,
-                                itemBuilder: (BuildContext context, int index) {
-                                  final _CategoryData category =
-                                      _categories[index];
-                                  return ListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    title: Text(category.name),
-                                    subtitle: Text(category.flow.label),
-                                    trailing: IconButton(
-                                      icon: const Icon(Icons.delete_outline),
-                                      onPressed: _categories.length == 1
-                                          ? null
-                                          : () {
-                                              setState(() {
-                                                _categories.removeAt(index);
-                                                _persistState();
-                                              });
-                                              setModalState(() {});
-                                            },
-                                    ),
-                                  );
-                                },
-                              ),
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.icon(
-                          onPressed: () async {
-                            final _CategoryData? newCategory =
-                                await _showCreateCategoryDialog();
-                            if (newCategory == null) {
-                              return;
-                            }
-                            setState(() {
-                              _categories.add(newCategory);
-                              _persistState();
-                            });
-                            setModalState(() {});
-                          },
-                          icon: const Icon(Icons.add),
-                          label: const Text('Tambah kategori'),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-        );
-      },
-    );
-  }
-
   Future<void> _handleAddTransaction() async {
     if (_categories.isEmpty) {
       _showSnack('Belum ada kategori. Tambah dulu di Pengaturan.');
@@ -783,7 +538,7 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            _HeaderSection(onOpenSettings: _openCashSettings),
+            const _HeaderSection(),
             const SizedBox(height: 20),
             _BalanceCard(
               totalBalance: _totalBalance,
@@ -808,6 +563,179 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
             _TransactionSection(
               title: 'Transaksi Terbaru',
               transactions: recentTransactions,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPengaturanKasTab() {
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              'Pengaturan Kas',
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Kelola akun kas dan saldo awal.',
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: context.mutedText),
+            ),
+            const SizedBox(height: 16),
+            if (_cashAccounts.isEmpty)
+              Text(
+                'Belum ada akun kas.',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: context.mutedText),
+              ),
+            if (_cashAccounts.isNotEmpty)
+              ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _cashAccounts.length,
+                itemBuilder: (BuildContext context, int index) {
+                  final _CashAccount account = _cashAccounts[index];
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(account.name),
+                    subtitle: Text(
+                      'Saldo awal ${_formatWholeCurrency(account.openingBalance)}',
+                    ),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: () {
+                        if (_cashAccounts.length == 1) {
+                          _showSnack('Minimal harus ada satu akun kas.');
+                          return;
+                        }
+
+                        final bool hasTransaction = _transactions.any(
+                          (_TransactionData transaction) =>
+                              transaction.account == account.name,
+                        );
+                        if (hasTransaction) {
+                          _showSnack(
+                            'Akun ini sudah dipakai transaksi dan tidak bisa dihapus.',
+                          );
+                          return;
+                        }
+
+                        setState(() {
+                          _cashAccounts.removeAt(index);
+                          _persistState();
+                        });
+                      },
+                    ),
+                  );
+                },
+              ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () async {
+                  final _CashAccount? newAccount =
+                      await _showCreateCashAccountDialog();
+                  if (!mounted || newAccount == null) {
+                    return;
+                  }
+
+                  setState(() {
+                    _cashAccounts.add(newAccount);
+                    _persistState();
+                  });
+                },
+                icon: const Icon(Icons.add),
+                label: const Text('Tambah akun kas'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPengaturanKategoriTab() {
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              'Pengaturan Kategori',
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Kelola kategori pemasukan dan pengeluaran.',
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: context.mutedText),
+            ),
+            const SizedBox(height: 16),
+            if (_categories.isEmpty)
+              Text(
+                'Belum ada kategori.',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: context.mutedText),
+              ),
+            if (_categories.isNotEmpty)
+              ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _categories.length,
+                itemBuilder: (BuildContext context, int index) {
+                  final _CategoryData category = _categories[index];
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(category.name),
+                    subtitle: Text(category.flow.label),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: _categories.length == 1
+                          ? null
+                          : () {
+                              setState(() {
+                                _categories.removeAt(index);
+                                _persistState();
+                              });
+                            },
+                    ),
+                  );
+                },
+              ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () async {
+                  final _CategoryData? newCategory =
+                      await _showCreateCategoryDialog();
+                  if (!mounted || newCategory == null) {
+                    return;
+                  }
+                  setState(() {
+                    _categories.add(newCategory);
+                    _persistState();
+                  });
+                },
+                icon: const Icon(Icons.add),
+                label: const Text('Tambah kategori'),
+              ),
             ),
           ],
         ),
@@ -883,9 +811,12 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
           });
         },
       ),
-      body: _selectedBottomNavIndex == 0
-          ? _buildRingkasanTab()
-          : _buildDaftarTransaksiTab(),
+      body: switch (_selectedBottomNavIndex) {
+        0 => _buildRingkasanTab(),
+        1 => _buildDaftarTransaksiTab(),
+        2 => _buildPengaturanKasTab(),
+        _ => _buildPengaturanKategoriTab(),
+      },
     );
   }
 }
@@ -1113,9 +1044,7 @@ String _formatSignedCurrency(int value) {
 }
 
 class _HeaderSection extends StatelessWidget {
-  const _HeaderSection({required this.onOpenSettings});
-
-  final VoidCallback onOpenSettings;
+  const _HeaderSection();
 
   @override
   Widget build(BuildContext context) {
@@ -1141,11 +1070,6 @@ class _HeaderSection extends StatelessWidget {
         ),
         Row(
           children: <Widget>[
-            IconButton(
-              onPressed: onOpenSettings,
-              icon: Icon(Icons.settings_outlined, color: context.mutedText),
-              tooltip: 'Pengaturan kas',
-            ),
             CircleAvatar(
               radius: 22,
               backgroundColor: context.gradientStart,
@@ -1531,13 +1455,33 @@ class _BottomNavBar extends StatelessWidget {
                     : context.scheme.onSurfaceVariant,
               ),
             ),
-            const SizedBox(width: 40),
             IconButton(
               onPressed: () => onTap(1),
               tooltip: 'Daftar transaksi',
               icon: Icon(
                 Icons.receipt_long,
                 color: selectedIndex == 1
+                    ? context.scheme.primary
+                    : context.scheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(width: 40),
+            IconButton(
+              onPressed: () => onTap(2),
+              tooltip: 'Pengaturan kas',
+              icon: Icon(
+                Icons.account_balance_wallet_outlined,
+                color: selectedIndex == 2
+                    ? context.scheme.primary
+                    : context.scheme.onSurfaceVariant,
+              ),
+            ),
+            IconButton(
+              onPressed: () => onTap(3),
+              tooltip: 'Pengaturan kategori',
+              icon: Icon(
+                Icons.category_outlined,
+                color: selectedIndex == 3
                     ? context.scheme.primary
                     : context.scheme.onSurfaceVariant,
               ),
