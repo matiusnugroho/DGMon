@@ -143,48 +143,14 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
       ? Hive.box<dynamic>(_storageBoxName)
       : null;
 
-  List<_CashAccount> _defaultCashAccounts() => <_CashAccount>[
-    const _CashAccount(name: 'BRI', openingBalance: 20000000),
-    const _CashAccount(name: 'Tunai', openingBalance: 1000000),
-    const _CashAccount(name: 'Dompet', openingBalance: 0),
-  ];
+  List<_CashAccount> _defaultCashAccounts() => <_CashAccount>[];
 
-  List<_CategoryData> _defaultCategories() => <_CategoryData>[
-    const _CategoryData(
-      id: 'cat-1',
-      name: 'Makan',
-      flow: _CategoryFlow.expense,
-    ),
-    const _CategoryData(
-      id: 'cat-2',
-      name: 'Minum',
-      flow: _CategoryFlow.expense,
-    ),
-    const _CategoryData(
-      id: 'cat-3',
-      name: 'Transportasi',
-      flow: _CategoryFlow.expense,
-    ),
-    const _CategoryData(id: 'cat-4', name: 'Gaji', flow: _CategoryFlow.income),
-  ];
+  List<_CategoryData> _defaultCategories() => <_CategoryData>[];
 
-  List<_TransactionData> _defaultTransactions() => <_TransactionData>[
-    const _TransactionData(
-      title: 'Motor',
-      account: 'Dompet',
-      category: 'Transportasi',
-      amount: -15000,
-    ),
-    const _TransactionData(
-      title: 'Makan',
-      account: 'BRI',
-      category: 'Makan',
-      amount: -20000,
-    ),
-  ];
+  List<_TransactionData> _defaultTransactions() => <_TransactionData>[];
 
   int _deriveCategorySeed(List<_CategoryData> categories) {
-    int maxId = 4;
+    int maxId = 0;
     final RegExp pattern = RegExp(r'^cat-(\d+)$');
     for (final _CategoryData category in categories) {
       final RegExpMatch? match = pattern.firstMatch(category.id);
@@ -499,8 +465,13 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
   }
 
   Future<void> _handleAddTransaction() async {
+    if (_cashAccounts.isEmpty) {
+      _showSnack('Belum ada akun kas. Tambah dulu di menu Kas.');
+      return;
+    }
+
     if (_categories.isEmpty) {
-      _showSnack('Belum ada kategori. Tambah dulu di Pengaturan.');
+      _showSnack('Belum ada kategori. Tambah dulu di menu Kategori.');
       return;
     }
 
