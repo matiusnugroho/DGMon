@@ -7,9 +7,9 @@ void main() {
   testWidgets('Dashboard renders core sections', (WidgetTester tester) async {
     await tester.pumpWidget(const DgMonApp());
 
-    expect(find.text('Good Morning, Duo'), findsOneWidget);
-    expect(find.text('TOTAL BALANCE'), findsOneWidget);
-    expect(find.text('Recent Transactions'), findsOneWidget);
+    expect(find.text('Selamat pagi, Duo'), findsOneWidget);
+    expect(find.text('TOTAL SALDO'), findsOneWidget);
+    expect(find.text('Transaksi Terbaru'), findsOneWidget);
   });
 
   testWidgets('Plus button opens add transaction form', (
@@ -30,7 +30,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Ngopi'), findsOneWidget);
-    expect(find.text('BRI - Makan - Today'), findsAtLeastNWidgets(2));
+    expect(find.text('BRI - Makan - Hari ini'), findsAtLeastNWidgets(2));
   });
 
   testWidgets('Saving expense updates related cash balance', (
@@ -38,7 +38,7 @@ void main() {
   ) async {
     await tester.pumpWidget(const DgMonApp());
 
-    expect(find.text('\$19,980,000'), findsOneWidget);
+    expect(find.text('Rp 19.980.000'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.add));
     await tester.pumpAndSettle();
@@ -48,6 +48,6 @@ void main() {
     await tester.tap(find.text('Simpan'));
     await tester.pumpAndSettle();
 
-    expect(find.text('\$19,970,000'), findsOneWidget);
+    expect(find.text('Rp 19.970.000'), findsOneWidget);
   });
 }

@@ -9,16 +9,22 @@ void main() {
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await tester.pumpAndSettle();
 
-    expect(find.text('Cash Accounts'), findsOneWidget);
+    expect(find.text('Pengaturan Kas'), findsOneWidget);
 
-    await tester.tap(find.text('Add').first);
+    await tester.tap(find.text('Tambah').first);
     await tester.pumpAndSettle();
 
-    await tester.enterText(find.widgetWithText(TextFormField, 'Name'), 'BCA');
-    await tester.enterText(find.widgetWithText(TextFormField, 'Opening balance'), '1000');
-    await tester.tap(find.text('Save'));
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Nama akun'),
+      'BCA',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Saldo awal'),
+      '1000',
+    );
+    await tester.tap(find.text('Simpan'));
     await tester.pumpAndSettle();
 
-    expect(find.text('BCA'), findsOneWidget);
+    expect(find.text('BCA'), findsAtLeastNWidgets(1));
   });
 }

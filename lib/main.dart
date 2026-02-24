@@ -88,7 +88,7 @@ class DgMonApp extends StatelessWidget {
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'DGMon Finance Dashboard',
+      title: 'DGMon Keuangan',
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: scheme,
@@ -122,6 +122,7 @@ class FinanceDashboardPage extends StatefulWidget {
 
 class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
   int _categorySeed = 0;
+  int _selectedBottomNavIndex = 0;
   late List<_CashAccount> _cashAccounts;
   late List<_CategoryData> _categories;
   late List<_TransactionData> _transactions;
@@ -145,7 +146,7 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
   List<_CashAccount> _defaultCashAccounts() => <_CashAccount>[
     const _CashAccount(name: 'BRI', openingBalance: 20000000),
     const _CashAccount(name: 'Tunai', openingBalance: 1000000),
-    const _CashAccount(name: 'Wallet', openingBalance: 0),
+    const _CashAccount(name: 'Dompet', openingBalance: 0),
   ];
 
   List<_CategoryData> _defaultCategories() => <_CategoryData>[
@@ -170,7 +171,7 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
   List<_TransactionData> _defaultTransactions() => <_TransactionData>[
     const _TransactionData(
       title: 'Motor',
-      account: 'Wallet',
+      account: 'Dompet',
       category: 'Transportasi',
       amount: -15000,
     ),
@@ -419,6 +420,224 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
     );
   }
 
+  Future<_CashAccount?> _showCreateCashAccountDialog() async {
+    String accountName = '';
+    String openingBalanceText = '0';
+    final GlobalKey<FormState> formKey = GlobalKey<FormState>();
+
+    return showDialog<_CashAccount>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Tambah akun kas'),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                TextFormField(
+                  decoration: const InputDecoration(labelText: 'Nama akun'),
+                  validator: (String? value) {
+                    final String trimmed = value?.trim() ?? '';
+                    if (trimmed.isEmpty) {
+                      return 'Nama akun wajib diisi';
+                    }
+                    final bool alreadyExists = _cashAccounts.any(
+                      (_CashAccount account) =>
+                          account.name.toLowerCase() == trimmed.toLowerCase(),
+                    );
+                    if (alreadyExists) {
+                      return 'Akun kas sudah ada';
+                    }
+                    return null;
+                  },
+                  onChanged: (String value) => accountName = value,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  initialValue: openingBalanceText,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Saldo awal',
+                    prefixText: 'Rp ',
+                  ),
+                  validator: (String? value) {
+                    if (_parseNonNegativeWholeNumber(value) == null) {
+                      return 'Saldo awal tidak valid';
+                    }
+                    return null;
+                  },
+                  onChanged: (String value) => openingBalanceText = value,
+                ),
+              ],
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Batal'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (!(formKey.currentState?.validate() ?? false)) {
+                  return;
+                }
+                Navigator.of(dialogContext).pop(
+                  _CashAccount(
+                    name: accountName.trim(),
+                    openingBalance:
+                        _parseNonNegativeWholeNumber(openingBalanceText) ?? 0,
+                  ),
+                );
+              },
+              child: const Text('Simpan'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _openCashSettings() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: context.cardBackground,
+      builder: (BuildContext sheetContext) {
+        return StatefulBuilder(
+          builder:
+              (
+                BuildContext modalContext,
+                void Function(void Function()) setModalState,
+              ) {
+                return Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    20,
+                    20,
+                    20,
+                    MediaQuery.of(modalContext).viewInsets.bottom + 20,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: <Widget>[
+                          Text(
+                            'Pengaturan Kas',
+                            style: Theme.of(modalContext).textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                          IconButton(
+                            onPressed: () => Navigator.of(sheetContext).pop(),
+                            icon: const Icon(Icons.close),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 260),
+                        child: _cashAccounts.isEmpty
+                            ? Center(
+                                child: Text(
+                                  'Belum ada akun kas.',
+                                  style: Theme.of(modalContext)
+                                      .textTheme
+                                      .bodyMedium
+                                      ?.copyWith(color: context.mutedText),
+                                ),
+                              )
+                            : ListView.builder(
+                                shrinkWrap: true,
+                                itemCount: _cashAccounts.length,
+                                itemBuilder: (BuildContext context, int index) {
+                                  final _CashAccount account =
+                                      _cashAccounts[index];
+                                  return ListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    title: Text(account.name),
+                                    subtitle: Text(
+                                      'Saldo awal ${_formatWholeCurrency(account.openingBalance)}',
+                                    ),
+                                    trailing: IconButton(
+                                      icon: const Icon(Icons.delete_outline),
+                                      onPressed: () {
+                                        if (_cashAccounts.length == 1) {
+                                          _showSnack(
+                                            'Minimal harus ada satu akun kas.',
+                                          );
+                                          return;
+                                        }
+
+                                        final bool hasTransaction =
+                                            _transactions.any(
+                                              (_TransactionData transaction) =>
+                                                  transaction.account ==
+                                                  account.name,
+                                            );
+                                        if (hasTransaction) {
+                                          _showSnack(
+                                            'Akun ini sudah dipakai transaksi dan tidak bisa dihapus.',
+                                          );
+                                          return;
+                                        }
+
+                                        setState(() {
+                                          _cashAccounts.removeAt(index);
+                                          _persistState();
+                                        });
+                                        setModalState(() {});
+                                      },
+                                    ),
+                                  );
+                                },
+                              ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                Navigator.of(sheetContext).pop();
+                                _openCategorySettings();
+                              },
+                              icon: const Icon(Icons.category_outlined),
+                              label: const Text('Kategori'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: FilledButton.icon(
+                              onPressed: () async {
+                                final _CashAccount? newAccount =
+                                    await _showCreateCashAccountDialog();
+                                if (newAccount == null) {
+                                  return;
+                                }
+
+                                setState(() {
+                                  _cashAccounts.add(newAccount);
+                                  _persistState();
+                                });
+                                setModalState(() {});
+                              },
+                              icon: const Icon(Icons.add),
+                              label: const Text('Tambah'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              },
+        );
+      },
+    );
+  }
+
   Future<void> _openCategorySettings() async {
     await showModalBottomSheet<void>(
       context: context,
@@ -526,7 +745,7 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
 
   Future<void> _handleAddTransaction() async {
     if (_categories.isEmpty) {
-      _showSnack('Belum ada kategori. Tambah dulu di Settings.');
+      _showSnack('Belum ada kategori. Tambah dulu di Pengaturan.');
       return;
     }
 
@@ -551,6 +770,80 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
       _transactions.insert(0, newTransaction);
       _persistState();
     });
+  }
+
+  Widget _buildRingkasanTab() {
+    final List<_TransactionData> recentTransactions = _transactions
+        .take(5)
+        .toList(growable: false);
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            _HeaderSection(onOpenSettings: _openCashSettings),
+            const SizedBox(height: 20),
+            _BalanceCard(
+              totalBalance: _totalBalance,
+              totalIncome: _totalIncome,
+              totalExpense: _totalExpense,
+              netValue: _netValue,
+            ),
+            const SizedBox(height: 24),
+            _AccountCarousel(
+              accounts: _cashAccounts
+                  .map(
+                    (_CashAccount account) => _AccountBalanceData(
+                      name: account.name,
+                      balance: _balanceForAccount(account.name),
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+            const SizedBox(height: 24),
+            const _InsightSection(),
+            const SizedBox(height: 24),
+            _TransactionSection(
+              title: 'Transaksi Terbaru',
+              transactions: recentTransactions,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDaftarTransaksiTab() {
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              'Daftar Transaksi',
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Semua catatan pemasukan dan pengeluaran.',
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: context.mutedText),
+            ),
+            const SizedBox(height: 20),
+            _TransactionSection(
+              title: 'Semua Transaksi',
+              transactions: _transactions,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -579,40 +872,20 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
           child: Icon(Icons.add, size: 28, color: context.scheme.onPrimary),
         ),
       ),
-      bottomNavigationBar: const _BottomNavBar(),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              _HeaderSection(onOpenSettings: _openCategorySettings),
-              const SizedBox(height: 20),
-              _BalanceCard(
-                totalBalance: _totalBalance,
-                totalIncome: _totalIncome,
-                totalExpense: _totalExpense,
-                netValue: _netValue,
-              ),
-              const SizedBox(height: 24),
-              _AccountCarousel(
-                accounts: _cashAccounts
-                    .map(
-                      (_CashAccount account) => _AccountBalanceData(
-                        name: account.name,
-                        balance: _balanceForAccount(account.name),
-                      ),
-                    )
-                    .toList(growable: false),
-              ),
-              const SizedBox(height: 24),
-              const _InsightSection(),
-              const SizedBox(height: 24),
-              _TransactionSection(transactions: _transactions),
-            ],
-          ),
-        ),
+      bottomNavigationBar: _BottomNavBar(
+        selectedIndex: _selectedBottomNavIndex,
+        onTap: (int index) {
+          if (_selectedBottomNavIndex == index) {
+            return;
+          }
+          setState(() {
+            _selectedBottomNavIndex = index;
+          });
+        },
       ),
+      body: _selectedBottomNavIndex == 0
+          ? _buildRingkasanTab()
+          : _buildDaftarTransaksiTab(),
     );
   }
 }
@@ -724,7 +997,7 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
               decoration: const InputDecoration(
                 labelText: 'Nominal',
                 border: OutlineInputBorder(),
-                prefixText: '\$ ',
+                prefixText: 'Rp ',
               ),
               validator: (String? value) {
                 if (_parsePositiveWholeNumber(value) == null) {
@@ -811,6 +1084,17 @@ int? _parsePositiveWholeNumber(String? value) {
   return parsedValue;
 }
 
+int? _parseNonNegativeWholeNumber(String? value) {
+  if (value == null) {
+    return null;
+  }
+  final String numericOnly = value.replaceAll(RegExp(r'[^0-9]'), '');
+  if (numericOnly.isEmpty) {
+    return null;
+  }
+  return int.tryParse(numericOnly);
+}
+
 String _formatWholeCurrency(int value) {
   final String source = value.toString();
   final List<String> chunks = <String>[];
@@ -818,7 +1102,7 @@ String _formatWholeCurrency(int value) {
     final int start = i - 3 < 0 ? 0 : i - 3;
     chunks.insert(0, source.substring(start, i));
   }
-  return '\$${chunks.join(',')}';
+  return 'Rp ${chunks.join('.')}';
 }
 
 String _formatSignedCurrency(int value) {
@@ -843,14 +1127,14 @@ class _HeaderSection extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Text(
-              'Good Morning, Duo',
+              'Selamat pagi, Duo',
               style: textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.w700,
               ),
             ),
             const SizedBox(height: 4),
             Text(
-              'Your money is under control',
+              'Keuanganmu lagi rapi hari ini.',
               style: textTheme.bodyMedium?.copyWith(color: context.mutedText),
             ),
           ],
@@ -860,7 +1144,7 @@ class _HeaderSection extends StatelessWidget {
             IconButton(
               onPressed: onOpenSettings,
               icon: Icon(Icons.settings_outlined, color: context.mutedText),
-              tooltip: 'Pengaturan kategori',
+              tooltip: 'Pengaturan kas',
             ),
             CircleAvatar(
               radius: 22,
@@ -912,7 +1196,7 @@ class _BalanceCard extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: <Widget>[
               Text(
-                'TOTAL BALANCE',
+                'TOTAL SALDO',
                 style: textTheme.labelSmall?.copyWith(
                   color: context.subtleOnPrimary,
                   letterSpacing: 1.2,
@@ -935,19 +1219,19 @@ class _BalanceCard extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: <Widget>[
               _MetricItem(
-                title: 'Income',
+                title: 'Masuk',
                 value: _formatWholeCurrency(totalIncome),
                 labelColor: context.subtleOnPrimary,
                 valueColor: context.scheme.onPrimary,
               ),
               _MetricItem(
-                title: 'Expense',
+                title: 'Keluar',
                 value: '-${_formatWholeCurrency(totalExpense)}',
                 labelColor: context.subtleOnPrimary,
                 valueColor: context.scheme.onPrimary,
               ),
               _MetricItem(
-                title: 'Net',
+                title: 'Bersih',
                 value: _formatSignedCurrency(netValue),
                 labelColor: context.subtleOnPrimary,
                 valueColor: context.scheme.onPrimary,
@@ -1078,7 +1362,7 @@ class _InsightSection extends StatelessWidget {
         color: context.cardBackground,
       ),
       child: Text(
-        'You spent 65% more on Food this week compared to last week.',
+        'Pengeluaran minggu ini naik 65% untuk kategori makan dibanding minggu lalu.',
         style: textTheme.bodyMedium,
       ),
     );
@@ -1086,8 +1370,9 @@ class _InsightSection extends StatelessWidget {
 }
 
 class _TransactionSection extends StatelessWidget {
-  const _TransactionSection({required this.transactions});
+  const _TransactionSection({required this.title, required this.transactions});
 
+  final String title;
   final List<_TransactionData> transactions;
 
   @override
@@ -1097,7 +1382,7 @@ class _TransactionSection extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         Text(
-          'Recent Transactions',
+          title,
           style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 16),
@@ -1158,7 +1443,7 @@ class _TransactionData {
   }
 
   bool get isExpense => amount < 0;
-  String get subtitle => '$account - $category - Today';
+  String get subtitle => '$account - $category - Hari ini';
   String get formattedAmount =>
       '${isExpense ? '-' : '+'}${_formatWholeCurrency(amount.abs())}';
 }
@@ -1219,7 +1504,10 @@ class _TransactionItem extends StatelessWidget {
 }
 
 class _BottomNavBar extends StatelessWidget {
-  const _BottomNavBar();
+  const _BottomNavBar({required this.selectedIndex, required this.onTap});
+
+  final int selectedIndex;
+  final ValueChanged<int> onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1233,9 +1521,27 @@ class _BottomNavBar extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: <Widget>[
-            Icon(Icons.dashboard, color: context.scheme.primary),
+            IconButton(
+              onPressed: () => onTap(0),
+              tooltip: 'Ringkasan',
+              icon: Icon(
+                Icons.dashboard,
+                color: selectedIndex == 0
+                    ? context.scheme.primary
+                    : context.scheme.onSurfaceVariant,
+              ),
+            ),
             const SizedBox(width: 40),
-            Icon(Icons.bar_chart, color: context.scheme.onSurfaceVariant),
+            IconButton(
+              onPressed: () => onTap(1),
+              tooltip: 'Daftar transaksi',
+              icon: Icon(
+                Icons.receipt_long,
+                color: selectedIndex == 1
+                    ? context.scheme.primary
+                    : context.scheme.onSurfaceVariant,
+              ),
+            ),
           ],
         ),
       ),
