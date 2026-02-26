@@ -1,8 +1,15 @@
 import 'dart:async';
 
+import 'package:excel/excel.dart' as xl;
+import 'package:file_saver/file_saver.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+
+part 'menus/ringkasan_menu.dart';
+part 'menus/kas_menu.dart';
+part 'menus/kategori_menu.dart';
+part 'menus/transaksi_menu.dart';
 
 const String _storageBoxName = 'dgmon_storage';
 const String _cashAccountsStorageKey = 'cash_accounts';
@@ -30,6 +37,15 @@ extension _TransactionFilterTypeX on _TransactionFilterType {
     _TransactionFilterType.thisMonth => 'Bulan ini',
     _TransactionFilterType.specificMonth => 'Pada bulan',
     _TransactionFilterType.monthRange => 'Rentang bulan',
+  };
+}
+
+enum _TransactionMenuAction { exportFilteredExcel, exportAllExcel }
+
+extension _TransactionMenuActionX on _TransactionMenuAction {
+  String get label => switch (this) {
+    _TransactionMenuAction.exportFilteredExcel => 'Unduh sesuai filter',
+    _TransactionMenuAction.exportAllExcel => 'Unduh semua transaksi',
   };
 }
 
@@ -957,6 +973,125 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  void _applyState(VoidCallback updater) {
+    if (!mounted) {
+      return;
+    }
+    setState(updater);
+  }
+
+  Future<void> _exportTransactionRecapExcel(
+    List<_TransactionData> transactions,
+  ) async {
+    if (transactions.isEmpty) {
+      _showSnack('Tidak ada transaksi untuk diekspor.');
+      return;
+    }
+
+    final String fileName = _buildTransactionRecapFileName(DateTime.now());
+    final Uint8List bytes = _buildTransactionRecapExcelBytes(transactions);
+
+    try {
+      final String? path = await FileSaver.instance.saveAs(
+        name: fileName,
+        bytes: bytes,
+        fileExtension: 'xlsx',
+        mimeType: MimeType.microsoftExcel,
+      );
+      if (!mounted) {
+        return;
+      }
+      if (path == null || path.isEmpty) {
+        _showSnack('Penyimpanan dibatalkan.');
+        return;
+      }
+      _showSnack('Rekap Excel berhasil diunduh.');
+      return;
+    } catch (_) {
+      // Fallback saat Save As tidak tersedia pada platform tertentu.
+    }
+
+    try {
+      final String path = await FileSaver.instance.saveFile(
+        name: fileName,
+        bytes: bytes,
+        fileExtension: 'xlsx',
+        mimeType: MimeType.microsoftExcel,
+      );
+      if (!mounted) {
+        return;
+      }
+      if (path.isEmpty) {
+        _showSnack('Rekap Excel berhasil diunduh.');
+        return;
+      }
+      _showSnack('Rekap Excel tersimpan di $path');
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      _showSnack('Gagal membuat file Excel.');
+    }
+  }
+
+  Uint8List _buildTransactionRecapExcelBytes(List<_TransactionData> source) {
+    final xl.Excel workbook = xl.Excel.createExcel();
+    const String sheetName = 'Rekap';
+    final String defaultSheetName = workbook.getDefaultSheet() ?? 'Sheet1';
+    if (defaultSheetName != sheetName) {
+      workbook.rename(defaultSheetName, sheetName);
+    }
+    workbook.setDefaultSheet(sheetName);
+
+    workbook.appendRow(sheetName, <xl.CellValue?>[
+      xl.TextCellValue('Tanggal'),
+      xl.TextCellValue('Transaksi'),
+      xl.TextCellValue('Akun'),
+      xl.TextCellValue('Kategori'),
+      xl.TextCellValue('Arus'),
+      xl.TextCellValue('Nominal'),
+    ]);
+
+    for (final _TransactionData transaction in source) {
+      workbook.appendRow(sheetName, <xl.CellValue?>[
+        xl.TextCellValue(_formatDateForExport(transaction.date.toLocal())),
+        xl.TextCellValue(transaction.title),
+        xl.TextCellValue(transaction.account),
+        xl.TextCellValue(transaction.category),
+        xl.TextCellValue(transaction.isExpense ? 'Keluar' : 'Masuk'),
+        xl.IntCellValue(transaction.amount),
+      ]);
+    }
+
+    final int totalIncome = source
+        .where((_TransactionData tx) => tx.amount > 0)
+        .fold<int>(0, (int sum, _TransactionData tx) => sum + tx.amount);
+    final int totalExpense = source
+        .where((_TransactionData tx) => tx.amount < 0)
+        .fold<int>(0, (int sum, _TransactionData tx) => sum + tx.amount.abs());
+    final int netAmount = totalIncome - totalExpense;
+
+    workbook.appendRow(sheetName, <xl.CellValue?>[]);
+    workbook.appendRow(sheetName, <xl.CellValue?>[
+      xl.TextCellValue('Total pemasukan'),
+      xl.IntCellValue(totalIncome),
+    ]);
+    workbook.appendRow(sheetName, <xl.CellValue?>[
+      xl.TextCellValue('Total pengeluaran'),
+      xl.IntCellValue(-totalExpense),
+    ]);
+    workbook.appendRow(sheetName, <xl.CellValue?>[
+      xl.TextCellValue('Selisih'),
+      xl.IntCellValue(netAmount),
+    ]);
+
+    final List<int>? encoded = workbook.encode();
+    if (encoded == null) {
+      throw StateError('Workbook tidak dapat di-encode.');
+    }
+    return Uint8List.fromList(encoded);
+  }
+
   Future<_CategoryData?> _showCreateCategoryDialog() async {
     String categoryName = '';
     _CategoryFlow selectedFlow = _CategoryFlow.expense;
@@ -1164,414 +1299,13 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
 
     setState(() {
       _transactions.insert(0, newTransaction);
+      _selectedBottomNavIndex = 1;
+      _selectedTransactionAccountFilter = null;
+      _selectedTransactionCategoryFilter = null;
+      _selectedTransactionFilter = _TransactionFilterType.specificMonth;
+      _selectedMonthKey = _monthKey(newTransaction.date);
       _persistState();
     });
-  }
-
-  Widget _buildRingkasanTab() {
-    final List<_TransactionData> recentTransactions = _transactions
-        .take(5)
-        .toList(growable: false);
-
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            const _HeaderSection(),
-            const SizedBox(height: 20),
-            _BalanceCard(
-              totalBalance: _totalBalance,
-              totalIncome: _totalIncome,
-              totalExpense: _totalExpense,
-              netValue: _netValue,
-            ),
-            const SizedBox(height: 24),
-            _AccountCarousel(
-              accounts: _cashAccounts
-                  .map(
-                    (_CashAccount account) => _AccountBalanceData(
-                      name: account.name,
-                      balance: _balanceForAccount(account.name),
-                    ),
-                  )
-                  .toList(growable: false),
-              onAddPressed: _handleAddCashAccount,
-            ),
-            const SizedBox(height: 24),
-            _TransactionSection(
-              title: 'Transaksi Terbaru',
-              transactions: recentTransactions,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPengaturanKasTab() {
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              'Pengaturan Kas',
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Kelola akun kas dan saldo awal.',
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: context.mutedText),
-            ),
-            const SizedBox(height: 16),
-            if (_cashAccounts.isEmpty)
-              Text(
-                'Belum ada akun kas.',
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyMedium?.copyWith(color: context.mutedText),
-              ),
-            if (_cashAccounts.isNotEmpty)
-              ListView.separated(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: _cashAccounts.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 10),
-                itemBuilder: (BuildContext context, int index) {
-                  final _CashAccount account = _cashAccounts[index];
-                  return _CashAccountSettingItem(
-                    accountName: account.name,
-                    currentBalance: _balanceForAccount(account.name),
-                    openingBalance: account.openingBalance,
-                    onActionSelected: (_CashAccountMenuAction action) {
-                      _handleCashAccountMenuAction(
-                        index: index,
-                        account: account,
-                        action: action,
-                      );
-                    },
-                  );
-                },
-              ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: _handleAddCashAccount,
-                icon: const Icon(Icons.add),
-                label: const Text('Tambah akun kas'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPengaturanKategoriTab() {
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              'Pengaturan Kategori',
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Kelola kategori pemasukan dan pengeluaran.',
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: context.mutedText),
-            ),
-            const SizedBox(height: 16),
-            if (_categories.isEmpty)
-              Text(
-                'Belum ada kategori.',
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyMedium?.copyWith(color: context.mutedText),
-              ),
-            if (_categories.isNotEmpty)
-              ListView.separated(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: _categories.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 10),
-                itemBuilder: (BuildContext context, int index) {
-                  final _CategoryData category = _categories[index];
-                  return _CategorySettingItem(
-                    categoryName: category.name,
-                    flow: category.flow,
-                    onActionSelected: (_CategoryMenuAction action) {
-                      _handleCategoryMenuAction(
-                        index: index,
-                        category: category,
-                        action: action,
-                      );
-                    },
-                  );
-                },
-              ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: () async {
-                  final _CategoryData? newCategory =
-                      await _showCreateCategoryDialog();
-                  if (!mounted || newCategory == null) {
-                    return;
-                  }
-                  setState(() {
-                    _categories.add(newCategory);
-                    _persistState();
-                  });
-                },
-                icon: const Icon(Icons.add),
-                label: const Text('Tambah kategori'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDaftarTransaksiTab() {
-    final List<int> monthKeys = _availableMonthKeys();
-    final int effectiveSelectedMonthKey = monthKeys.contains(_selectedMonthKey)
-        ? _selectedMonthKey
-        : monthKeys.first;
-    final int effectiveRangeStartMonthKey =
-        monthKeys.contains(_rangeStartMonthKey)
-        ? _rangeStartMonthKey
-        : monthKeys.last;
-    final int effectiveRangeEndMonthKey = monthKeys.contains(_rangeEndMonthKey)
-        ? _rangeEndMonthKey
-        : monthKeys.first;
-    final List<_TransactionData> filteredTransactions = _filteredTransactions(
-      selectedMonthKey: effectiveSelectedMonthKey,
-      rangeStartMonthKey: effectiveRangeStartMonthKey,
-      rangeEndMonthKey: effectiveRangeEndMonthKey,
-      accountFilter: _selectedTransactionAccountFilter,
-      categoryFilter: _selectedTransactionCategoryFilter,
-    );
-
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              'Daftar Transaksi',
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Semua catatan pemasukan dan pengeluaran.',
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: context.mutedText),
-            ),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _TransactionFilterType.values
-                  .map(
-                    (_TransactionFilterType filterType) => ChoiceChip(
-                      label: Text(filterType.label),
-                      selected: _selectedTransactionFilter == filterType,
-                      onSelected: (bool isSelected) {
-                        if (!isSelected) {
-                          return;
-                        }
-                        setState(() {
-                          _selectedTransactionFilter = filterType;
-                        });
-                      },
-                    ),
-                  )
-                  .toList(growable: false),
-            ),
-            if (_selectedTransactionAccountFilter != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 10),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color: context.scheme.primaryContainer.withValues(
-                      alpha: 0.5,
-                    ),
-                  ),
-                  child: Row(
-                    children: <Widget>[
-                      Icon(
-                        Icons.account_balance_wallet_outlined,
-                        size: 18,
-                        color: context.scheme.primary,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Filter kas: ${_selectedTransactionAccountFilter!}',
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () {
-                          setState(() {
-                            _selectedTransactionAccountFilter = null;
-                          });
-                        },
-                        icon: const Icon(Icons.close),
-                        tooltip: 'Hapus filter kas',
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            if (_selectedTransactionCategoryFilter != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    color: context.scheme.secondaryContainer.withValues(
-                      alpha: 0.45,
-                    ),
-                  ),
-                  child: Row(
-                    children: <Widget>[
-                      Icon(
-                        Icons.category_outlined,
-                        size: 18,
-                        color: context.scheme.secondary,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Filter kategori: ${_selectedTransactionCategoryFilter!}',
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () {
-                          setState(() {
-                            _selectedTransactionCategoryFilter = null;
-                          });
-                        },
-                        icon: const Icon(Icons.close),
-                        tooltip: 'Hapus filter kategori',
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            if (_selectedTransactionFilter ==
-                _TransactionFilterType.specificMonth)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: InkWell(
-                  onTap: () =>
-                      _pickSpecificMonth(monthKeys, effectiveSelectedMonthKey),
-                  borderRadius: BorderRadius.circular(12),
-                  child: InputDecorator(
-                    decoration: const InputDecoration(
-                      labelText: 'Pada bulan',
-                      border: OutlineInputBorder(),
-                      suffixIcon: Icon(Icons.calendar_month_outlined),
-                    ),
-                    child: Text(
-                      _formatMonthYear(effectiveSelectedMonthKey),
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ),
-                ),
-              ),
-            if (_selectedTransactionFilter == _TransactionFilterType.monthRange)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Row(
-                  children: <Widget>[
-                    Expanded(
-                      child: InkWell(
-                        onTap: () => _pickRangeStartMonth(
-                          monthKeys,
-                          effectiveRangeStartMonthKey,
-                        ),
-                        borderRadius: BorderRadius.circular(12),
-                        child: InputDecorator(
-                          decoration: const InputDecoration(
-                            labelText: 'Dari bulan',
-                            border: OutlineInputBorder(),
-                            suffixIcon: Icon(Icons.calendar_month_outlined),
-                          ),
-                          child: Text(
-                            _formatMonthYear(effectiveRangeStartMonthKey),
-                            style: Theme.of(context).textTheme.bodyMedium,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: InkWell(
-                        onTap: () => _pickRangeEndMonth(
-                          monthKeys,
-                          effectiveRangeEndMonthKey,
-                        ),
-                        borderRadius: BorderRadius.circular(12),
-                        child: InputDecorator(
-                          decoration: const InputDecoration(
-                            labelText: 'Sampai bulan',
-                            border: OutlineInputBorder(),
-                            suffixIcon: Icon(Icons.calendar_month_outlined),
-                          ),
-                          child: Text(
-                            _formatMonthYear(effectiveRangeEndMonthKey),
-                            style: Theme.of(context).textTheme.bodyMedium,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            const SizedBox(height: 20),
-            _TransactionSection(
-              title: 'Semua Transaksi',
-              transactions: filteredTransactions,
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   @override
@@ -1918,6 +1652,17 @@ String _formatDateForInput(DateTime date) {
   return '${localDate.day} ${_monthName(localDate.month)} ${localDate.year}';
 }
 
+String _formatDateForExport(DateTime date) {
+  final DateTime localDate = date.toLocal();
+  return '${_padTwoDigits(localDate.day)}-${_padTwoDigits(localDate.month)}-${localDate.year}';
+}
+
+String _buildTransactionRecapFileName(DateTime dateTime) {
+  return 'rekap_transaksi_${dateTime.year}${_padTwoDigits(dateTime.month)}${_padTwoDigits(dateTime.day)}_${_padTwoDigits(dateTime.hour)}${_padTwoDigits(dateTime.minute)}';
+}
+
+String _padTwoDigits(int value) => value.toString().padLeft(2, '0');
+
 String _formatGroupedNumber(String source) {
   final List<String> chunks = <String>[];
   for (int i = source.length; i > 0; i -= 3) {
@@ -1994,937 +1739,6 @@ String _greetingForHour(int hour) {
     return 'Selamat sore';
   }
   return 'Selamat malam';
-}
-
-class _HeaderSection extends StatefulWidget {
-  const _HeaderSection();
-
-  @override
-  State<_HeaderSection> createState() => _HeaderSectionState();
-}
-
-class _HeaderSectionState extends State<_HeaderSection> {
-  late DateTime _now;
-  Timer? _timeTicker;
-
-  @override
-  void initState() {
-    super.initState();
-    _now = DateTime.now();
-    _timeTicker = Timer.periodic(const Duration(minutes: 1), (_) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _now = DateTime.now();
-      });
-    });
-  }
-
-  @override
-  void dispose() {
-    _timeTicker?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final TextTheme textTheme = Theme.of(context).textTheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Text(
-          '${_greetingForHour(_now.hour)}, Duo',
-          style: textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 4),
-      ],
-    );
-  }
-}
-
-class _BalanceCard extends StatelessWidget {
-  const _BalanceCard({
-    required this.totalBalance,
-    required this.totalIncome,
-    required this.totalExpense,
-    required this.netValue,
-  });
-
-  final int totalBalance;
-  final int totalIncome;
-  final int totalExpense;
-  final int netValue;
-
-  @override
-  Widget build(BuildContext context) {
-    final TextTheme textTheme = Theme.of(context).textTheme;
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        gradient: LinearGradient(
-          colors: <Color>[context.gradientStart, context.gradientEnd],
-        ),
-        boxShadow: <BoxShadow>[
-          BoxShadow(
-            color: context.shadow,
-            blurRadius: 15,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              Text(
-                'TOTAL SALDO',
-                style: textTheme.labelSmall?.copyWith(
-                  color: context.subtleOnPrimary,
-                  letterSpacing: 1.2,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            _formatSignedCurrency(totalBalance),
-            style: textTheme.headlineMedium?.copyWith(
-              color: context.scheme.onPrimary,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: <Widget>[
-              _MetricItem(
-                title: 'Masuk',
-                value: _formatWholeCurrency(totalIncome),
-                labelColor: context.subtleOnPrimary,
-                valueColor: context.scheme.onPrimary,
-              ),
-              _MetricItem(
-                title: 'Keluar',
-                value: '-${_formatWholeCurrency(totalExpense)}',
-                labelColor: context.subtleOnPrimary,
-                valueColor: context.scheme.onPrimary,
-              ),
-              _MetricItem(
-                title: 'Bersih',
-                value: _formatSignedCurrency(netValue),
-                labelColor: context.subtleOnPrimary,
-                valueColor: context.scheme.onPrimary,
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MetricItem extends StatelessWidget {
-  const _MetricItem({
-    required this.title,
-    required this.value,
-    required this.labelColor,
-    required this.valueColor,
-  });
-
-  final String title;
-  final String value;
-  final Color labelColor;
-  final Color valueColor;
-
-  @override
-  Widget build(BuildContext context) {
-    final TextTheme textTheme = Theme.of(context).textTheme;
-    return Column(
-      children: <Widget>[
-        Text(title, style: textTheme.labelSmall?.copyWith(color: labelColor)),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: textTheme.bodyMedium?.copyWith(
-            color: valueColor,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _AccountCarousel extends StatelessWidget {
-  const _AccountCarousel({required this.accounts, required this.onAddPressed});
-
-  final List<_AccountBalanceData> accounts;
-  final VoidCallback onAddPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 180,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        children: <Widget>[
-          for (final _AccountBalanceData account in accounts)
-            _AccountCard(name: account.name, balance: account.balance),
-          _AddAccountCard(onPressed: onAddPressed),
-        ],
-      ),
-    );
-  }
-}
-
-class _AccountBalanceData {
-  const _AccountBalanceData({required this.name, required this.balance});
-
-  final String name;
-  final int balance;
-}
-
-class _AccountCard extends StatelessWidget {
-  const _AccountCard({required this.name, required this.balance});
-
-  final String name;
-  final int balance;
-
-  @override
-  Widget build(BuildContext context) {
-    final TextTheme textTheme = Theme.of(context).textTheme;
-    final Color onCardColor = context.scheme.onPrimary;
-    final Color negativeBalanceColor = const Color(0xFFFFDADA);
-
-    return Container(
-      width: 220,
-      margin: const EdgeInsets.only(right: 16),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: <Color>[
-            context.gradientStart,
-            Color.lerp(context.gradientEnd, Colors.black, 0.25) ??
-                context.gradientEnd,
-          ],
-        ),
-        border: Border.all(color: onCardColor.withValues(alpha: 0.15)),
-        boxShadow: <BoxShadow>[
-          BoxShadow(
-            color: context.shadow.withValues(alpha: 0.28),
-            blurRadius: 14,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: Stack(
-          children: <Widget>[
-            Positioned(
-              right: -8,
-              top: -12,
-              child: Text(
-                'DG',
-                style: textTheme.displaySmall?.copyWith(
-                  color: onCardColor.withValues(alpha: 0.14),
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -2,
-                ),
-              ),
-            ),
-            Positioned(
-              right: -42,
-              bottom: -44,
-              child: Container(
-                width: 120,
-                height: 120,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: onCardColor.withValues(alpha: 0.08),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: <Widget>[
-                      Icon(
-                        Icons.contactless,
-                        color: onCardColor.withValues(alpha: 0.8),
-                        size: 17,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Container(
-                    width: 36,
-                    height: 24,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(6),
-                      color: onCardColor.withValues(alpha: 0.22),
-                      border: Border.all(
-                        color: onCardColor.withValues(alpha: 0.36),
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  Text(
-                    name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: onCardColor,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    _formatSignedCurrency(balance),
-                    style: textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: balance < 0 ? negativeBalanceColor : onCardColor,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _AddAccountCard extends StatelessWidget {
-  const _AddAccountCard({required this.onPressed});
-
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final TextTheme textTheme = Theme.of(context).textTheme;
-    return Container(
-      width: 220,
-      margin: const EdgeInsets.only(right: 16),
-      child: OutlinedButton(
-        onPressed: onPressed,
-        style: OutlinedButton.styleFrom(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-          ),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Icon(Icons.add_circle_outline, color: context.scheme.primary),
-            const SizedBox(height: 8),
-            Text(
-              'Tambah akun kas',
-              style: textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              'Geser untuk lihat kartu lain',
-              style: textTheme.bodySmall?.copyWith(color: context.mutedText),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _CashAccountSettingItem extends StatelessWidget {
-  const _CashAccountSettingItem({
-    required this.accountName,
-    required this.currentBalance,
-    required this.openingBalance,
-    required this.onActionSelected,
-  });
-
-  final String accountName;
-  final int currentBalance;
-  final int openingBalance;
-  final ValueChanged<_CashAccountMenuAction> onActionSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    final TextTheme textTheme = Theme.of(context).textTheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        color: Colors.white,
-        boxShadow: <BoxShadow>[
-          BoxShadow(
-            color: const Color(0xFF9E9E9E).withValues(alpha: 0.18),
-            blurRadius: 14,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: <Widget>[
-          Container(
-            width: 48,
-            height: 48,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              color: Color(0xFFEAF2F0),
-            ),
-            child: Icon(
-              Icons.account_balance_wallet_outlined,
-              color: context.scheme.primary,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  accountName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Saat ini ${_formatSignedCurrency(currentBalance)}',
-                  style: textTheme.bodyMedium?.copyWith(
-                    color: context.mutedText,
-                  ),
-                ),
-                Text(
-                  'Saldo awal ${_formatWholeCurrency(openingBalance)}',
-                  style: textTheme.bodySmall?.copyWith(
-                    color: context.mutedText,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          PopupMenuButton<_CashAccountMenuAction>(
-            tooltip: 'Aksi akun kas',
-            color: Colors.white,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-            icon: Icon(
-              Icons.more_vert_rounded,
-              color: context.mutedText,
-              size: 22,
-            ),
-            onSelected: onActionSelected,
-            itemBuilder: (BuildContext context) =>
-                <PopupMenuEntry<_CashAccountMenuAction>>[
-                  PopupMenuItem<_CashAccountMenuAction>(
-                    value: _CashAccountMenuAction.viewTransactions,
-                    child: _SettingsMenuItemRow(
-                      icon: Icons.receipt_long,
-                      label: _CashAccountMenuAction.viewTransactions.label,
-                    ),
-                  ),
-                  PopupMenuItem<_CashAccountMenuAction>(
-                    value: _CashAccountMenuAction.editAccount,
-                    child: _SettingsMenuItemRow(
-                      icon: Icons.edit_outlined,
-                      label: _CashAccountMenuAction.editAccount.label,
-                    ),
-                  ),
-                  PopupMenuItem<_CashAccountMenuAction>(
-                    value: _CashAccountMenuAction.adjustBalance,
-                    child: _SettingsMenuItemRow(
-                      icon: Icons.tune_rounded,
-                      label: _CashAccountMenuAction.adjustBalance.label,
-                    ),
-                  ),
-                  const PopupMenuDivider(),
-                  PopupMenuItem<_CashAccountMenuAction>(
-                    value: _CashAccountMenuAction.deleteAccount,
-                    child: _SettingsMenuItemRow(
-                      icon: Icons.delete_outline,
-                      label: _CashAccountMenuAction.deleteAccount.label,
-                      isDestructive: true,
-                    ),
-                  ),
-                ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CategorySettingItem extends StatelessWidget {
-  const _CategorySettingItem({
-    required this.categoryName,
-    required this.flow,
-    required this.onActionSelected,
-  });
-
-  final String categoryName;
-  final _CategoryFlow flow;
-  final ValueChanged<_CategoryMenuAction> onActionSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    final TextTheme textTheme = Theme.of(context).textTheme;
-    final bool isExpense = flow == _CategoryFlow.expense;
-    final Color badgeColor = isExpense
-        ? const Color(0xFFF8EDE8)
-        : const Color(0xFFE9F4EC);
-    final Color iconColor = isExpense
-        ? const Color(0xFFB6463F)
-        : const Color(0xFF2B995D);
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        color: Colors.white,
-        boxShadow: <BoxShadow>[
-          BoxShadow(
-            color: const Color(0xFF9E9E9E).withValues(alpha: 0.18),
-            blurRadius: 14,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Row(
-        children: <Widget>[
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: badgeColor,
-            ),
-            child: Icon(
-              isExpense ? Icons.redo_rounded : Icons.reply_rounded,
-              color: iconColor,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  categoryName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  flow == _CategoryFlow.expense
-                      ? 'Kategori pengeluaran'
-                      : 'Kategori pemasukan',
-                  style: textTheme.bodyMedium?.copyWith(
-                    color: context.mutedText,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          PopupMenuButton<_CategoryMenuAction>(
-            tooltip: 'Aksi kategori',
-            color: Colors.white,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-            icon: Icon(
-              Icons.more_vert_rounded,
-              color: context.mutedText,
-              size: 22,
-            ),
-            onSelected: onActionSelected,
-            itemBuilder: (BuildContext context) =>
-                <PopupMenuEntry<_CategoryMenuAction>>[
-                  PopupMenuItem<_CategoryMenuAction>(
-                    value: _CategoryMenuAction.viewTransactions,
-                    child: _SettingsMenuItemRow(
-                      icon: Icons.receipt_long,
-                      label: _CategoryMenuAction.viewTransactions.label,
-                    ),
-                  ),
-                  PopupMenuItem<_CategoryMenuAction>(
-                    value: _CategoryMenuAction.editCategory,
-                    child: _SettingsMenuItemRow(
-                      icon: Icons.edit_outlined,
-                      label: _CategoryMenuAction.editCategory.label,
-                    ),
-                  ),
-                  const PopupMenuDivider(),
-                  PopupMenuItem<_CategoryMenuAction>(
-                    value: _CategoryMenuAction.deleteCategory,
-                    child: _SettingsMenuItemRow(
-                      icon: Icons.delete_outline,
-                      label: _CategoryMenuAction.deleteCategory.label,
-                      isDestructive: true,
-                    ),
-                  ),
-                ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SettingsMenuItemRow extends StatelessWidget {
-  const _SettingsMenuItemRow({
-    required this.icon,
-    required this.label,
-    this.isDestructive = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool isDestructive;
-
-  @override
-  Widget build(BuildContext context) {
-    const Color softMenuTextColor = Color(0xFF4A5560);
-    final Color textColor = isDestructive
-        ? context.scheme.error
-        : softMenuTextColor;
-    return Row(
-      children: <Widget>[
-        Icon(icon, size: 18, color: textColor),
-        const SizedBox(width: 10),
-        Text(label, style: TextStyle(color: textColor)),
-      ],
-    );
-  }
-}
-
-class _MonthPickerDialog extends StatefulWidget {
-  const _MonthPickerDialog({
-    required this.initialMonth,
-    required this.firstMonth,
-    required this.lastMonth,
-  });
-
-  final DateTime initialMonth;
-  final DateTime firstMonth;
-  final DateTime lastMonth;
-
-  @override
-  State<_MonthPickerDialog> createState() => _MonthPickerDialogState();
-}
-
-class _MonthPickerDialogState extends State<_MonthPickerDialog> {
-  late int _visibleYear;
-
-  @override
-  void initState() {
-    super.initState();
-    _visibleYear = widget.initialMonth.year;
-  }
-
-  bool get _canGoToPreviousYear => _visibleYear > widget.firstMonth.year;
-
-  bool get _canGoToNextYear => _visibleYear < widget.lastMonth.year;
-
-  bool _isMonthEnabled(int month) {
-    final int monthKey = _monthKey(DateTime(_visibleYear, month));
-    return monthKey >= _monthKey(widget.firstMonth) &&
-        monthKey <= _monthKey(widget.lastMonth);
-  }
-
-  bool _isSelectedMonth(int month) =>
-      _visibleYear == widget.initialMonth.year &&
-      month == widget.initialMonth.month;
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Pilih bulan'),
-      content: SizedBox(
-        width: 320,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: <Widget>[
-                IconButton(
-                  onPressed: _canGoToPreviousYear
-                      ? () {
-                          setState(() {
-                            _visibleYear -= 1;
-                          });
-                        }
-                      : null,
-                  icon: const Icon(Icons.chevron_left),
-                ),
-                Text(
-                  '$_visibleYear',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                IconButton(
-                  onPressed: _canGoToNextYear
-                      ? () {
-                          setState(() {
-                            _visibleYear += 1;
-                          });
-                        }
-                      : null,
-                  icon: const Icon(Icons.chevron_right),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: List<Widget>.generate(12, (int index) {
-                final int month = index + 1;
-                final bool isEnabled = _isMonthEnabled(month);
-                return ChoiceChip(
-                  label: Text(_shortMonthName(month)),
-                  selected: _isSelectedMonth(month),
-                  onSelected: isEnabled
-                      ? (_) {
-                          Navigator.of(
-                            context,
-                          ).pop(DateTime(_visibleYear, month));
-                        }
-                      : null,
-                );
-              }),
-            ),
-          ],
-        ),
-      ),
-      actions: <Widget>[
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Batal'),
-        ),
-      ],
-    );
-  }
-}
-
-class _TransactionSection extends StatelessWidget {
-  const _TransactionSection({required this.title, required this.transactions});
-
-  final String title;
-  final List<_TransactionData> transactions;
-
-  @override
-  Widget build(BuildContext context) {
-    final TextTheme textTheme = Theme.of(context).textTheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Text(
-          title,
-          style: textTheme.titleLarge?.copyWith(
-            fontWeight: FontWeight.w700,
-            fontSize: 20,
-          ),
-        ),
-        const SizedBox(height: 16),
-        if (transactions.isEmpty)
-          Text(
-            'Belum ada transaksi.',
-            style: textTheme.bodyMedium?.copyWith(color: context.mutedText),
-          ),
-        for (final _TransactionData transaction in transactions)
-          _TransactionItem(
-            title: transaction.title,
-            subtitle: transaction.subtitle,
-            amount: transaction.formattedAmount,
-            isExpense: transaction.isExpense,
-          ),
-      ],
-    );
-  }
-}
-
-class _TransactionData {
-  const _TransactionData({
-    required this.title,
-    required this.account,
-    required this.category,
-    required this.amount,
-    required this.date,
-  });
-
-  final String title;
-  final String account;
-  final String category;
-  final int amount;
-  final DateTime date;
-
-  Map<String, Object> toJson() => <String, Object>{
-    'title': title,
-    'account': account,
-    'category': category,
-    'amount': amount,
-    'date': date.toIso8601String(),
-  };
-
-  static _TransactionData? fromJson(Map<String, dynamic> json) {
-    final String? title = json['title'] as String?;
-    final String? account = json['account'] as String?;
-    final String? category = json['category'] as String?;
-    final int? amount = json['amount'] as int?;
-    final String? dateRaw = json['date'] as String?;
-    final DateTime parsedDate = dateRaw == null
-        ? DateTime.now()
-        : DateTime.tryParse(dateRaw)?.toLocal() ?? DateTime.now();
-    if (title == null ||
-        account == null ||
-        category == null ||
-        amount == null) {
-      return null;
-    }
-    return _TransactionData(
-      title: title,
-      account: account,
-      category: category,
-      amount: amount,
-      date: parsedDate,
-    );
-  }
-
-  bool get isExpense => amount < 0;
-  String get subtitle =>
-      '$account - $category - ${_formatTransactionDate(date)}';
-  String get formattedAmount =>
-      '${isExpense ? '-' : '+'}${_formatWholeCurrency(amount.abs())}';
-}
-
-class _TransactionItem extends StatelessWidget {
-  const _TransactionItem({
-    required this.title,
-    required this.subtitle,
-    required this.amount,
-    required this.isExpense,
-  });
-
-  final String title;
-  final String subtitle;
-  final String amount;
-  final bool isExpense;
-
-  @override
-  Widget build(BuildContext context) {
-    final TextTheme textTheme = Theme.of(context).textTheme;
-    final Color amountColor = isExpense
-        ? const Color(0xFF9F2F2A)
-        : const Color(0xFF1E8F52);
-    final Color iconColor = isExpense
-        ? const Color(0xFFB6463F)
-        : const Color(0xFF2B995D);
-    final Color iconBackground = isExpense
-        ? const Color(0xFFF8EDE8)
-        : const Color(0xFFE9F4EC);
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(22),
-        color: Colors.white,
-        boxShadow: <BoxShadow>[
-          BoxShadow(
-            color: const Color(0xFF9E9E9E).withValues(alpha: 0.22),
-            blurRadius: 16,
-            offset: const Offset(0, 7),
-          ),
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: <Widget>[
-          Expanded(
-            child: Row(
-              children: <Widget>[
-                Container(
-                  width: 50,
-                  height: 50,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: iconBackground,
-                  ),
-                  child: Icon(
-                    isExpense ? Icons.redo_rounded : Icons.reply_rounded,
-                    color: iconColor,
-                    size: 24,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 18,
-                          height: 1.15,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        subtitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: textTheme.bodyMedium?.copyWith(
-                          color: context.mutedText,
-                          fontSize: 14,
-                          height: 1.2,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          Text(
-            amount,
-            style: textTheme.titleMedium?.copyWith(
-              color: amountColor,
-              fontWeight: FontWeight.w700,
-              fontSize: 17,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class _BottomNavBar extends StatelessWidget {

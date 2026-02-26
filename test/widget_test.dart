@@ -8,10 +8,10 @@ void main() {
     await tester.pumpWidget(const DgMonApp());
 
     final List<String> possibleGreetings = <String>[
-      'Selamat pagi, Duo',
-      'Selamat siang, Duo',
-      'Selamat sore, Duo',
-      'Selamat malam, Duo',
+      'Selamat pagi',
+      'Selamat siang',
+      'Selamat sore',
+      'Selamat malam',
     ];
     final bool hasGreeting = possibleGreetings.any(
       (String greeting) => find.text(greeting).evaluate().isNotEmpty,
@@ -85,8 +85,8 @@ void main() {
     await tester.tap(find.text('Simpan'));
     await tester.pumpAndSettle();
 
+    expect(find.text('Daftar Transaksi'), findsOneWidget);
     expect(find.text('Sarapan'), findsOneWidget);
     expect(find.text('BRI - Makan - Hari ini'), findsAtLeastNWidgets(1));
-    expect(find.text('Rp 19.990.000'), findsAtLeastNWidgets(1));
   });
 }
