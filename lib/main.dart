@@ -33,6 +33,32 @@ extension _TransactionFilterTypeX on _TransactionFilterType {
   };
 }
 
+enum _CashAccountMenuAction {
+  viewTransactions,
+  editAccount,
+  adjustBalance,
+  deleteAccount,
+}
+
+extension _CashAccountMenuActionX on _CashAccountMenuAction {
+  String get label => switch (this) {
+    _CashAccountMenuAction.viewTransactions => 'Lihat transaksi',
+    _CashAccountMenuAction.editAccount => 'Edit akun',
+    _CashAccountMenuAction.adjustBalance => 'Adjust saldo',
+    _CashAccountMenuAction.deleteAccount => 'Hapus akun',
+  };
+}
+
+enum _CategoryMenuAction { viewTransactions, editCategory, deleteCategory }
+
+extension _CategoryMenuActionX on _CategoryMenuAction {
+  String get label => switch (this) {
+    _CategoryMenuAction.viewTransactions => 'Lihat transaksi',
+    _CategoryMenuAction.editCategory => 'Edit kategori',
+    _CategoryMenuAction.deleteCategory => 'Hapus kategori',
+  };
+}
+
 String _flowToStorage(_CategoryFlow flow) =>
     flow == _CategoryFlow.income ? 'income' : 'expense';
 
@@ -137,6 +163,8 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
   int _selectedBottomNavIndex = 0;
   _TransactionFilterType _selectedTransactionFilter =
       _TransactionFilterType.today;
+  String? _selectedTransactionAccountFilter;
+  String? _selectedTransactionCategoryFilter;
   late List<_CashAccount> _cashAccounts;
   late List<_CategoryData> _categories;
   late List<_TransactionData> _transactions;
@@ -336,6 +364,8 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
     required int selectedMonthKey,
     required int rangeStartMonthKey,
     required int rangeEndMonthKey,
+    String? accountFilter,
+    String? categoryFilter,
   }) {
     final DateTime now = DateTime.now();
     final int normalizedRangeStart = rangeStartMonthKey <= rangeEndMonthKey
@@ -347,6 +377,13 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
 
     return _transactions
         .where((_TransactionData transaction) {
+          if (accountFilter != null && transaction.account != accountFilter) {
+            return false;
+          }
+          if (categoryFilter != null &&
+              transaction.category != categoryFilter) {
+            return false;
+          }
           final DateTime transactionDate = transaction.date.toLocal();
           switch (_selectedTransactionFilter) {
             case _TransactionFilterType.today:
@@ -375,6 +412,470 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
       _cashAccounts.add(newAccount);
       _persistState();
     });
+  }
+
+  void _openTransactionsForAccount(String accountName) {
+    setState(() {
+      _selectedBottomNavIndex = 1;
+      _selectedTransactionAccountFilter = accountName;
+      _selectedTransactionCategoryFilter = null;
+    });
+  }
+
+  void _openTransactionsForCategory(String categoryName) {
+    setState(() {
+      _selectedBottomNavIndex = 1;
+      _selectedTransactionCategoryFilter = categoryName;
+      _selectedTransactionAccountFilter = null;
+    });
+  }
+
+  Future<String?> _showEditCashAccountDialog(_CashAccount account) async {
+    String accountName = account.name;
+    final GlobalKey<FormState> formKey = GlobalKey<FormState>();
+
+    return showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Edit akun kas'),
+          content: Form(
+            key: formKey,
+            child: TextFormField(
+              initialValue: account.name,
+              decoration: const InputDecoration(labelText: 'Nama akun'),
+              validator: (String? value) {
+                final String trimmed = value?.trim() ?? '';
+                if (trimmed.isEmpty) {
+                  return 'Nama akun wajib diisi';
+                }
+                final bool duplicateExists = _cashAccounts.any(
+                  (_CashAccount item) =>
+                      item.name.toLowerCase() == trimmed.toLowerCase() &&
+                      item.name.toLowerCase() != account.name.toLowerCase(),
+                );
+                if (duplicateExists) {
+                  return 'Akun kas sudah ada';
+                }
+                return null;
+              },
+              onChanged: (String value) => accountName = value,
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Batal'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (!(formKey.currentState?.validate() ?? false)) {
+                  return;
+                }
+                Navigator.of(dialogContext).pop(accountName.trim());
+              },
+              child: const Text('Simpan'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<int?> _showAdjustBalanceDialog(_CashAccount account) async {
+    bool isIncrease = true;
+    final GlobalKey<FormState> formKey = GlobalKey<FormState>();
+    final TextEditingController amountController = TextEditingController();
+
+    final int? result = await showDialog<int>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder:
+              (
+                BuildContext modalContext,
+                void Function(void Function()) setModalState,
+              ) {
+                return AlertDialog(
+                  title: const Text('Adjust saldo akun'),
+                  content: Form(
+                    key: formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          'Saldo saat ini ${_formatSignedCurrency(_balanceForAccount(account.name))}',
+                          style: Theme.of(modalContext).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          children: <Widget>[
+                            ChoiceChip(
+                              label: const Text('Tambah'),
+                              selected: isIncrease,
+                              onSelected: (_) {
+                                setModalState(() {
+                                  isIncrease = true;
+                                });
+                              },
+                            ),
+                            ChoiceChip(
+                              label: const Text('Kurangi'),
+                              selected: !isIncrease,
+                              onSelected: (_) {
+                                setModalState(() {
+                                  isIncrease = false;
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: amountController,
+                          keyboardType: TextInputType.number,
+                          inputFormatters: <TextInputFormatter>[
+                            FilteringTextInputFormatter.digitsOnly,
+                            _ThousandSeparatorInputFormatter(),
+                          ],
+                          decoration: const InputDecoration(
+                            labelText: 'Nominal adjust',
+                            prefixText: 'Rp ',
+                          ),
+                          validator: (String? value) {
+                            if (_parsePositiveWholeNumber(value) == null) {
+                              return 'Nominal tidak valid';
+                            }
+                            return null;
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  actions: <Widget>[
+                    TextButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      child: const Text('Batal'),
+                    ),
+                    FilledButton(
+                      onPressed: () {
+                        if (!(formKey.currentState?.validate() ?? false)) {
+                          return;
+                        }
+                        final int amount =
+                            _parsePositiveWholeNumber(amountController.text) ??
+                            0;
+                        Navigator.of(
+                          dialogContext,
+                        ).pop(isIncrease ? amount : -amount);
+                      },
+                      child: const Text('Simpan'),
+                    ),
+                  ],
+                );
+              },
+        );
+      },
+    );
+
+    amountController.dispose();
+    return result;
+  }
+
+  Future<void> _deleteCashAccountAt(int index) async {
+    if (_cashAccounts.length == 1) {
+      _showSnack('Minimal harus ada satu akun kas.');
+      return;
+    }
+
+    final _CashAccount account = _cashAccounts[index];
+    final bool hasTransaction = _transactions.any(
+      (_TransactionData transaction) => transaction.account == account.name,
+    );
+    if (hasTransaction) {
+      _showSnack('Akun ini sudah dipakai transaksi dan tidak bisa dihapus.');
+      return;
+    }
+
+    setState(() {
+      _cashAccounts.removeAt(index);
+      if (_selectedTransactionAccountFilter == account.name) {
+        _selectedTransactionAccountFilter = null;
+      }
+      _persistState();
+    });
+  }
+
+  Future<void> _handleCashAccountMenuAction({
+    required int index,
+    required _CashAccount account,
+    required _CashAccountMenuAction action,
+  }) async {
+    int resolveIndex() {
+      if (index >= 0 &&
+          index < _cashAccounts.length &&
+          _cashAccounts[index].name == account.name) {
+        return index;
+      }
+      return _cashAccounts.indexWhere(
+        (_CashAccount item) => item.name == account.name,
+      );
+    }
+
+    switch (action) {
+      case _CashAccountMenuAction.viewTransactions:
+        _openTransactionsForAccount(account.name);
+        return;
+      case _CashAccountMenuAction.editAccount:
+        final String? newName = await _showEditCashAccountDialog(account);
+        if (!mounted || newName == null || newName == account.name) {
+          return;
+        }
+        final int currentIndex = resolveIndex();
+        if (currentIndex == -1) {
+          return;
+        }
+        setState(() {
+          final String oldName = _cashAccounts[currentIndex].name;
+          _cashAccounts[currentIndex] = _CashAccount(
+            name: newName,
+            openingBalance: _cashAccounts[currentIndex].openingBalance,
+          );
+          _transactions = _transactions
+              .map(
+                (_TransactionData tx) => tx.account == oldName
+                    ? _TransactionData(
+                        title: tx.title,
+                        account: newName,
+                        category: tx.category,
+                        amount: tx.amount,
+                        date: tx.date,
+                      )
+                    : tx,
+              )
+              .toList(growable: false);
+          if (_selectedTransactionAccountFilter == oldName) {
+            _selectedTransactionAccountFilter = newName;
+          }
+          _persistState();
+        });
+        return;
+      case _CashAccountMenuAction.adjustBalance:
+        final int? delta = await _showAdjustBalanceDialog(account);
+        if (!mounted || delta == null || delta == 0) {
+          return;
+        }
+        final int currentIndex = resolveIndex();
+        if (currentIndex == -1) {
+          return;
+        }
+        setState(() {
+          final _CashAccount current = _cashAccounts[currentIndex];
+          _cashAccounts[currentIndex] = _CashAccount(
+            name: current.name,
+            openingBalance: current.openingBalance + delta,
+          );
+          _persistState();
+        });
+        return;
+      case _CashAccountMenuAction.deleteAccount:
+        final int currentIndex = resolveIndex();
+        if (currentIndex == -1) {
+          return;
+        }
+        await _deleteCashAccountAt(currentIndex);
+        return;
+    }
+  }
+
+  Future<_CategoryData?> _showEditCategoryDialog(_CategoryData category) async {
+    String categoryName = category.name;
+    _CategoryFlow selectedFlow = category.flow;
+    final GlobalKey<FormState> formKey = GlobalKey<FormState>();
+
+    return showDialog<_CategoryData>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder:
+              (
+                BuildContext modalContext,
+                void Function(void Function()) setModalState,
+              ) {
+                return AlertDialog(
+                  title: const Text('Edit kategori'),
+                  content: Form(
+                    key: formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        TextFormField(
+                          initialValue: category.name,
+                          decoration: const InputDecoration(
+                            labelText: 'Nama kategori',
+                          ),
+                          validator: (String? value) {
+                            final String trimmed = value?.trim() ?? '';
+                            if (trimmed.isEmpty) {
+                              return 'Nama kategori wajib diisi';
+                            }
+                            final bool duplicateExists = _categories.any(
+                              (_CategoryData item) =>
+                                  item.name.toLowerCase() ==
+                                      trimmed.toLowerCase() &&
+                                  item.id != category.id,
+                            );
+                            if (duplicateExists) {
+                              return 'Kategori sudah ada';
+                            }
+                            return null;
+                          },
+                          onChanged: (String value) => categoryName = value,
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButtonFormField<_CategoryFlow>(
+                          initialValue: selectedFlow,
+                          decoration: const InputDecoration(labelText: 'Arus'),
+                          items: _CategoryFlow.values
+                              .map(
+                                (_CategoryFlow flow) =>
+                                    DropdownMenuItem<_CategoryFlow>(
+                                      value: flow,
+                                      child: Text(flow.label),
+                                    ),
+                              )
+                              .toList(),
+                          onChanged: (_CategoryFlow? value) {
+                            if (value == null) {
+                              return;
+                            }
+                            setModalState(() {
+                              selectedFlow = value;
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  actions: <Widget>[
+                    TextButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      child: const Text('Batal'),
+                    ),
+                    FilledButton(
+                      onPressed: () {
+                        if (!(formKey.currentState?.validate() ?? false)) {
+                          return;
+                        }
+                        Navigator.of(dialogContext).pop(
+                          _CategoryData(
+                            id: category.id,
+                            name: categoryName.trim(),
+                            flow: selectedFlow,
+                          ),
+                        );
+                      },
+                      child: const Text('Simpan'),
+                    ),
+                  ],
+                );
+              },
+        );
+      },
+    );
+  }
+
+  Future<void> _deleteCategoryAt(int index) async {
+    if (_categories.length == 1) {
+      _showSnack('Minimal harus ada satu kategori.');
+      return;
+    }
+
+    final _CategoryData category = _categories[index];
+    final bool hasTransaction = _transactions.any(
+      (_TransactionData tx) => tx.category == category.name,
+    );
+    if (hasTransaction) {
+      _showSnack(
+        'Kategori ini sudah dipakai transaksi dan tidak bisa dihapus.',
+      );
+      return;
+    }
+
+    setState(() {
+      _categories.removeAt(index);
+      if (_selectedTransactionCategoryFilter == category.name) {
+        _selectedTransactionCategoryFilter = null;
+      }
+      _persistState();
+    });
+  }
+
+  Future<void> _handleCategoryMenuAction({
+    required int index,
+    required _CategoryData category,
+    required _CategoryMenuAction action,
+  }) async {
+    int resolveIndex() {
+      if (index >= 0 &&
+          index < _categories.length &&
+          _categories[index].id == category.id) {
+        return index;
+      }
+      return _categories.indexWhere(
+        (_CategoryData item) => item.id == category.id,
+      );
+    }
+
+    switch (action) {
+      case _CategoryMenuAction.viewTransactions:
+        _openTransactionsForCategory(category.name);
+        return;
+      case _CategoryMenuAction.editCategory:
+        final _CategoryData? editedCategory = await _showEditCategoryDialog(
+          category,
+        );
+        if (!mounted || editedCategory == null) {
+          return;
+        }
+        final int currentIndex = resolveIndex();
+        if (currentIndex == -1) {
+          return;
+        }
+        final _CategoryData currentCategory = _categories[currentIndex];
+        setState(() {
+          _categories[currentIndex] = editedCategory;
+          if (editedCategory.name != currentCategory.name) {
+            _transactions = _transactions
+                .map(
+                  (_TransactionData tx) => tx.category == currentCategory.name
+                      ? _TransactionData(
+                          title: tx.title,
+                          account: tx.account,
+                          category: editedCategory.name,
+                          amount: tx.amount,
+                          date: tx.date,
+                        )
+                      : tx,
+                )
+                .toList(growable: false);
+            if (_selectedTransactionCategoryFilter == currentCategory.name) {
+              _selectedTransactionCategoryFilter = editedCategory.name;
+            }
+          }
+          _persistState();
+        });
+        return;
+      case _CategoryMenuAction.deleteCategory:
+        final int currentIndex = resolveIndex();
+        if (currentIndex == -1) {
+          return;
+        }
+        await _deleteCategoryAt(currentIndex);
+        return;
+    }
   }
 
   Future<int?> _showMonthPickerDialog(
@@ -738,43 +1239,24 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
                 ).textTheme.bodyMedium?.copyWith(color: context.mutedText),
               ),
             if (_cashAccounts.isNotEmpty)
-              ListView.builder(
+              ListView.separated(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 itemCount: _cashAccounts.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
                 itemBuilder: (BuildContext context, int index) {
                   final _CashAccount account = _cashAccounts[index];
-                  return ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(account.name),
-                    subtitle: Text(
-                      'Saldo awal ${_formatWholeCurrency(account.openingBalance)}',
-                    ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline),
-                      onPressed: () {
-                        if (_cashAccounts.length == 1) {
-                          _showSnack('Minimal harus ada satu akun kas.');
-                          return;
-                        }
-
-                        final bool hasTransaction = _transactions.any(
-                          (_TransactionData transaction) =>
-                              transaction.account == account.name,
-                        );
-                        if (hasTransaction) {
-                          _showSnack(
-                            'Akun ini sudah dipakai transaksi dan tidak bisa dihapus.',
-                          );
-                          return;
-                        }
-
-                        setState(() {
-                          _cashAccounts.removeAt(index);
-                          _persistState();
-                        });
-                      },
-                    ),
+                  return _CashAccountSettingItem(
+                    accountName: account.name,
+                    currentBalance: _balanceForAccount(account.name),
+                    openingBalance: account.openingBalance,
+                    onActionSelected: (_CashAccountMenuAction action) {
+                      _handleCashAccountMenuAction(
+                        index: index,
+                        account: account,
+                        action: action,
+                      );
+                    },
                   );
                 },
               ),
@@ -822,27 +1304,23 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
                 ).textTheme.bodyMedium?.copyWith(color: context.mutedText),
               ),
             if (_categories.isNotEmpty)
-              ListView.builder(
+              ListView.separated(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 itemCount: _categories.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
                 itemBuilder: (BuildContext context, int index) {
                   final _CategoryData category = _categories[index];
-                  return ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(category.name),
-                    subtitle: Text(category.flow.label),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline),
-                      onPressed: _categories.length == 1
-                          ? null
-                          : () {
-                              setState(() {
-                                _categories.removeAt(index);
-                                _persistState();
-                              });
-                            },
-                    ),
+                  return _CategorySettingItem(
+                    categoryName: category.name,
+                    flow: category.flow,
+                    onActionSelected: (_CategoryMenuAction action) {
+                      _handleCategoryMenuAction(
+                        index: index,
+                        category: category,
+                        action: action,
+                      );
+                    },
                   );
                 },
               ),
@@ -887,6 +1365,8 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
       selectedMonthKey: effectiveSelectedMonthKey,
       rangeStartMonthKey: effectiveRangeStartMonthKey,
       rangeEndMonthKey: effectiveRangeEndMonthKey,
+      accountFilter: _selectedTransactionAccountFilter,
+      categoryFilter: _selectedTransactionCategoryFilter,
     );
 
     return SafeArea(
@@ -929,6 +1409,90 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
                   )
                   .toList(growable: false),
             ),
+            if (_selectedTransactionAccountFilter != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    color: context.scheme.primaryContainer.withValues(
+                      alpha: 0.5,
+                    ),
+                  ),
+                  child: Row(
+                    children: <Widget>[
+                      Icon(
+                        Icons.account_balance_wallet_outlined,
+                        size: 18,
+                        color: context.scheme.primary,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Filter kas: ${_selectedTransactionAccountFilter!}',
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () {
+                          setState(() {
+                            _selectedTransactionAccountFilter = null;
+                          });
+                        },
+                        icon: const Icon(Icons.close),
+                        tooltip: 'Hapus filter kas',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            if (_selectedTransactionCategoryFilter != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    color: context.scheme.secondaryContainer.withValues(
+                      alpha: 0.45,
+                    ),
+                  ),
+                  child: Row(
+                    children: <Widget>[
+                      Icon(
+                        Icons.category_outlined,
+                        size: 18,
+                        color: context.scheme.secondary,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Filter kategori: ${_selectedTransactionCategoryFilter!}',
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () {
+                          setState(() {
+                            _selectedTransactionCategoryFilter = null;
+                          });
+                        },
+                        icon: const Icon(Icons.close),
+                        tooltip: 'Hapus filter kategori',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             if (_selectedTransactionFilter ==
                 _TransactionFilterType.specificMonth)
               Padding(
@@ -1784,6 +2348,277 @@ class _AddAccountCard extends StatelessWidget {
   }
 }
 
+class _CashAccountSettingItem extends StatelessWidget {
+  const _CashAccountSettingItem({
+    required this.accountName,
+    required this.currentBalance,
+    required this.openingBalance,
+    required this.onActionSelected,
+  });
+
+  final String accountName;
+  final int currentBalance;
+  final int openingBalance;
+  final ValueChanged<_CashAccountMenuAction> onActionSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextTheme textTheme = Theme.of(context).textTheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        color: Colors.white,
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: const Color(0xFF9E9E9E).withValues(alpha: 0.18),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: <Widget>[
+          Container(
+            width: 48,
+            height: 48,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0xFFEAF2F0),
+            ),
+            child: Icon(
+              Icons.account_balance_wallet_outlined,
+              color: context.scheme.primary,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  accountName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Saat ini ${_formatSignedCurrency(currentBalance)}',
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: context.mutedText,
+                  ),
+                ),
+                Text(
+                  'Saldo awal ${_formatWholeCurrency(openingBalance)}',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: context.mutedText,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          PopupMenuButton<_CashAccountMenuAction>(
+            tooltip: 'Aksi akun kas',
+            color: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            icon: Icon(
+              Icons.more_vert_rounded,
+              color: context.mutedText,
+              size: 22,
+            ),
+            onSelected: onActionSelected,
+            itemBuilder: (BuildContext context) =>
+                <PopupMenuEntry<_CashAccountMenuAction>>[
+                  PopupMenuItem<_CashAccountMenuAction>(
+                    value: _CashAccountMenuAction.viewTransactions,
+                    child: _SettingsMenuItemRow(
+                      icon: Icons.receipt_long,
+                      label: _CashAccountMenuAction.viewTransactions.label,
+                    ),
+                  ),
+                  PopupMenuItem<_CashAccountMenuAction>(
+                    value: _CashAccountMenuAction.editAccount,
+                    child: _SettingsMenuItemRow(
+                      icon: Icons.edit_outlined,
+                      label: _CashAccountMenuAction.editAccount.label,
+                    ),
+                  ),
+                  PopupMenuItem<_CashAccountMenuAction>(
+                    value: _CashAccountMenuAction.adjustBalance,
+                    child: _SettingsMenuItemRow(
+                      icon: Icons.tune_rounded,
+                      label: _CashAccountMenuAction.adjustBalance.label,
+                    ),
+                  ),
+                  const PopupMenuDivider(),
+                  PopupMenuItem<_CashAccountMenuAction>(
+                    value: _CashAccountMenuAction.deleteAccount,
+                    child: _SettingsMenuItemRow(
+                      icon: Icons.delete_outline,
+                      label: _CashAccountMenuAction.deleteAccount.label,
+                      isDestructive: true,
+                    ),
+                  ),
+                ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CategorySettingItem extends StatelessWidget {
+  const _CategorySettingItem({
+    required this.categoryName,
+    required this.flow,
+    required this.onActionSelected,
+  });
+
+  final String categoryName;
+  final _CategoryFlow flow;
+  final ValueChanged<_CategoryMenuAction> onActionSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextTheme textTheme = Theme.of(context).textTheme;
+    final bool isExpense = flow == _CategoryFlow.expense;
+    final Color badgeColor = isExpense
+        ? const Color(0xFFF8EDE8)
+        : const Color(0xFFE9F4EC);
+    final Color iconColor = isExpense
+        ? const Color(0xFFB6463F)
+        : const Color(0xFF2B995D);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        color: Colors.white,
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: const Color(0xFF9E9E9E).withValues(alpha: 0.18),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        children: <Widget>[
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: badgeColor,
+            ),
+            child: Icon(
+              isExpense ? Icons.redo_rounded : Icons.reply_rounded,
+              color: iconColor,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  categoryName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  flow == _CategoryFlow.expense
+                      ? 'Kategori pengeluaran'
+                      : 'Kategori pemasukan',
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: context.mutedText,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          PopupMenuButton<_CategoryMenuAction>(
+            tooltip: 'Aksi kategori',
+            color: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            icon: Icon(
+              Icons.more_vert_rounded,
+              color: context.mutedText,
+              size: 22,
+            ),
+            onSelected: onActionSelected,
+            itemBuilder: (BuildContext context) =>
+                <PopupMenuEntry<_CategoryMenuAction>>[
+                  PopupMenuItem<_CategoryMenuAction>(
+                    value: _CategoryMenuAction.viewTransactions,
+                    child: _SettingsMenuItemRow(
+                      icon: Icons.receipt_long,
+                      label: _CategoryMenuAction.viewTransactions.label,
+                    ),
+                  ),
+                  PopupMenuItem<_CategoryMenuAction>(
+                    value: _CategoryMenuAction.editCategory,
+                    child: _SettingsMenuItemRow(
+                      icon: Icons.edit_outlined,
+                      label: _CategoryMenuAction.editCategory.label,
+                    ),
+                  ),
+                  const PopupMenuDivider(),
+                  PopupMenuItem<_CategoryMenuAction>(
+                    value: _CategoryMenuAction.deleteCategory,
+                    child: _SettingsMenuItemRow(
+                      icon: Icons.delete_outline,
+                      label: _CategoryMenuAction.deleteCategory.label,
+                      isDestructive: true,
+                    ),
+                  ),
+                ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsMenuItemRow extends StatelessWidget {
+  const _SettingsMenuItemRow({
+    required this.icon,
+    required this.label,
+    this.isDestructive = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool isDestructive;
+
+  @override
+  Widget build(BuildContext context) {
+    const Color softMenuTextColor = Color(0xFF4A5560);
+    final Color textColor = isDestructive
+        ? context.scheme.error
+        : softMenuTextColor;
+    return Row(
+      children: <Widget>[
+        Icon(icon, size: 18, color: textColor),
+        const SizedBox(width: 10),
+        Text(label, style: TextStyle(color: textColor)),
+      ],
+    );
+  }
+}
+
 class _MonthPickerDialog extends StatefulWidget {
   const _MonthPickerDialog({
     required this.initialMonth,
@@ -1909,7 +2744,10 @@ class _TransactionSection extends StatelessWidget {
       children: <Widget>[
         Text(
           title,
-          style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          style: textTheme.titleLarge?.copyWith(
+            fontWeight: FontWeight.w700,
+            fontSize: 20,
+          ),
         ),
         const SizedBox(height: 16),
         if (transactions.isEmpty)
@@ -1999,37 +2837,88 @@ class _TransactionItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final TextTheme textTheme = Theme.of(context).textTheme;
+    final Color amountColor = isExpense
+        ? const Color(0xFF9F2F2A)
+        : const Color(0xFF1E8F52);
+    final Color iconColor = isExpense
+        ? const Color(0xFFB6463F)
+        : const Color(0xFF2B995D);
+    final Color iconBackground = isExpense
+        ? const Color(0xFFF8EDE8)
+        : const Color(0xFFE9F4EC);
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        color: context.cardBackground,
+        borderRadius: BorderRadius.circular(22),
+        color: Colors.white,
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: const Color(0xFF9E9E9E).withValues(alpha: 0.22),
+            blurRadius: 16,
+            offset: const Offset(0, 7),
+          ),
+        ],
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: <Widget>[
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                title,
-                style: textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
+          Expanded(
+            child: Row(
+              children: <Widget>[
+                Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: iconBackground,
+                  ),
+                  child: Icon(
+                    isExpense ? Icons.redo_rounded : Icons.reply_rounded,
+                    color: iconColor,
+                    size: 24,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                subtitle,
-                style: textTheme.bodySmall?.copyWith(color: context.mutedText),
-              ),
-            ],
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 18,
+                          height: 1.15,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.bodyMedium?.copyWith(
+                          color: context.mutedText,
+                          fontSize: 14,
+                          height: 1.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
+          const SizedBox(width: 12),
           Text(
             amount,
-            style: textTheme.titleSmall?.copyWith(
-              color: isExpense ? context.scheme.error : context.scheme.primary,
+            style: textTheme.titleMedium?.copyWith(
+              color: amountColor,
               fontWeight: FontWeight.w700,
+              fontSize: 17,
             ),
           ),
         ],
