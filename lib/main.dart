@@ -990,6 +990,7 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
 
     final String fileName = _buildTransactionRecapFileName(DateTime.now());
     final Uint8List bytes = _buildTransactionRecapExcelBytes(transactions);
+    Object? saveAsError;
 
     try {
       final String? path = await FileSaver.instance.saveAs(
@@ -1007,7 +1008,16 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
       }
       _showSnack('Rekap Excel berhasil diunduh.');
       return;
-    } catch (_) {
+    } on MissingPluginException {
+      if (!mounted) {
+        return;
+      }
+      _showSnack(
+        'Fitur unduh belum aktif. Stop app lalu jalankan ulang, jangan hanya hot reload.',
+      );
+      return;
+    } catch (error) {
+      saveAsError = error;
       // Fallback saat Save As tidak tersedia pada platform tertentu.
     }
 
@@ -1021,15 +1031,25 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
       if (!mounted) {
         return;
       }
-      if (path.isEmpty) {
-        _showSnack('Rekap Excel berhasil diunduh.');
-        return;
+      final String normalizedPath = path.toLowerCase();
+      if (normalizedPath.startsWith('error while saving file')) {
+        throw StateError(path);
       }
       _showSnack('Rekap Excel tersimpan di $path');
-    } catch (_) {
+    } on MissingPluginException {
       if (!mounted) {
         return;
       }
+      _showSnack(
+        'Plugin unduh belum aktif. Stop app lalu jalankan ulang, jangan hanya hot reload.',
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      debugPrint(
+        'Export excel failed. saveAsError=$saveAsError saveFileError=$error',
+      );
       _showSnack('Gagal membuat file Excel.');
     }
   }
