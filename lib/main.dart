@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 const String _storageBoxName = 'dgmon_storage';
@@ -19,6 +20,17 @@ enum _CategoryFlow { income, expense }
 
 extension _CategoryFlowX on _CategoryFlow {
   String get label => this == _CategoryFlow.income ? 'Masuk' : 'Keluar';
+}
+
+enum _TransactionFilterType { today, thisMonth, specificMonth, monthRange }
+
+extension _TransactionFilterTypeX on _TransactionFilterType {
+  String get label => switch (this) {
+    _TransactionFilterType.today => 'Hari ini',
+    _TransactionFilterType.thisMonth => 'Bulan ini',
+    _TransactionFilterType.specificMonth => 'Pada bulan',
+    _TransactionFilterType.monthRange => 'Rentang bulan',
+  };
 }
 
 String _flowToStorage(_CategoryFlow flow) =>
@@ -123,9 +135,14 @@ class FinanceDashboardPage extends StatefulWidget {
 class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
   int _categorySeed = 0;
   int _selectedBottomNavIndex = 0;
+  _TransactionFilterType _selectedTransactionFilter =
+      _TransactionFilterType.today;
   late List<_CashAccount> _cashAccounts;
   late List<_CategoryData> _categories;
   late List<_TransactionData> _transactions;
+  late int _selectedMonthKey;
+  late int _rangeStartMonthKey;
+  late int _rangeEndMonthKey;
 
   String _nextCategoryId() => 'cat-${++_categorySeed}';
 
@@ -137,6 +154,10 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
     _transactions = _defaultTransactions();
     _categorySeed = _deriveCategorySeed(_categories);
     _loadPersistedState();
+    final int currentMonthKey = _monthKey(DateTime.now());
+    _selectedMonthKey = currentMonthKey;
+    _rangeStartMonthKey = currentMonthKey;
+    _rangeEndMonthKey = currentMonthKey;
   }
 
   Box<dynamic>? get _storageBox => Hive.isBoxOpen(_storageBoxName)
@@ -287,6 +308,150 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
 
   int get _netValue => _totalIncome - _totalExpense;
 
+  List<int> _availableMonthKeys() {
+    final DateTime now = DateTime.now();
+    int minYear = now.year - 5;
+    int maxYear = now.year + 2;
+
+    for (final _TransactionData transaction in _transactions) {
+      final int year = transaction.date.toLocal().year;
+      if (year < minYear) {
+        minYear = year;
+      }
+      if (year > maxYear) {
+        maxYear = year;
+      }
+    }
+
+    final List<int> monthKeys = <int>[];
+    for (int year = maxYear; year >= minYear; year--) {
+      for (int month = 12; month >= 1; month--) {
+        monthKeys.add(year * 100 + month);
+      }
+    }
+    return monthKeys;
+  }
+
+  List<_TransactionData> _filteredTransactions({
+    required int selectedMonthKey,
+    required int rangeStartMonthKey,
+    required int rangeEndMonthKey,
+  }) {
+    final DateTime now = DateTime.now();
+    final int normalizedRangeStart = rangeStartMonthKey <= rangeEndMonthKey
+        ? rangeStartMonthKey
+        : rangeEndMonthKey;
+    final int normalizedRangeEnd = rangeStartMonthKey <= rangeEndMonthKey
+        ? rangeEndMonthKey
+        : rangeStartMonthKey;
+
+    return _transactions
+        .where((_TransactionData transaction) {
+          final DateTime transactionDate = transaction.date.toLocal();
+          switch (_selectedTransactionFilter) {
+            case _TransactionFilterType.today:
+              return _isSameDay(transactionDate, now);
+            case _TransactionFilterType.thisMonth:
+              return transactionDate.year == now.year &&
+                  transactionDate.month == now.month;
+            case _TransactionFilterType.specificMonth:
+              return _monthKey(transactionDate) == selectedMonthKey;
+            case _TransactionFilterType.monthRange:
+              final int transactionMonthKey = _monthKey(transactionDate);
+              return transactionMonthKey >= normalizedRangeStart &&
+                  transactionMonthKey <= normalizedRangeEnd;
+          }
+        })
+        .toList(growable: false);
+  }
+
+  Future<void> _handleAddCashAccount() async {
+    final _CashAccount? newAccount = await _showCreateCashAccountDialog();
+    if (!mounted || newAccount == null) {
+      return;
+    }
+
+    setState(() {
+      _cashAccounts.add(newAccount);
+      _persistState();
+    });
+  }
+
+  Future<int?> _showMonthPickerDialog(
+    List<int> monthKeys,
+    int initialMonthKey,
+  ) async {
+    if (monthKeys.isEmpty) {
+      return null;
+    }
+
+    final DateTime? pickedMonth = await showDialog<DateTime>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return _MonthPickerDialog(
+          initialMonth: _dateFromMonthKey(initialMonthKey),
+          firstMonth: _dateFromMonthKey(monthKeys.last),
+          lastMonth: _dateFromMonthKey(monthKeys.first),
+        );
+      },
+    );
+    if (!mounted || pickedMonth == null) {
+      return null;
+    }
+    return _monthKey(pickedMonth);
+  }
+
+  Future<void> _pickSpecificMonth(
+    List<int> monthKeys,
+    int effectiveSelectedMonthKey,
+  ) async {
+    final int? pickedMonthKey = await _showMonthPickerDialog(
+      monthKeys,
+      effectiveSelectedMonthKey,
+    );
+    if (!mounted || pickedMonthKey == null) {
+      return;
+    }
+
+    setState(() {
+      _selectedMonthKey = pickedMonthKey;
+    });
+  }
+
+  Future<void> _pickRangeStartMonth(
+    List<int> monthKeys,
+    int effectiveRangeStartMonthKey,
+  ) async {
+    final int? pickedMonthKey = await _showMonthPickerDialog(
+      monthKeys,
+      effectiveRangeStartMonthKey,
+    );
+    if (!mounted || pickedMonthKey == null) {
+      return;
+    }
+
+    setState(() {
+      _rangeStartMonthKey = pickedMonthKey;
+    });
+  }
+
+  Future<void> _pickRangeEndMonth(
+    List<int> monthKeys,
+    int effectiveRangeEndMonthKey,
+  ) async {
+    final int? pickedMonthKey = await _showMonthPickerDialog(
+      monthKeys,
+      effectiveRangeEndMonthKey,
+    );
+    if (!mounted || pickedMonthKey == null) {
+      return;
+    }
+
+    setState(() {
+      _rangeEndMonthKey = pickedMonthKey;
+    });
+  }
+
   void _showSnack(String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
@@ -423,6 +588,10 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
                 TextFormField(
                   initialValue: openingBalanceText,
                   keyboardType: TextInputType.number,
+                  inputFormatters: <TextInputFormatter>[
+                    FilteringTextInputFormatter.digitsOnly,
+                    _ThousandSeparatorInputFormatter(),
+                  ],
                   decoration: const InputDecoration(
                     labelText: 'Saldo awal',
                     prefixText: 'Rp ',
@@ -527,9 +696,8 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
                     ),
                   )
                   .toList(growable: false),
+              onAddPressed: _handleAddCashAccount,
             ),
-            const SizedBox(height: 24),
-            const _InsightSection(),
             const SizedBox(height: 24),
             _TransactionSection(
               title: 'Transaksi Terbaru',
@@ -614,18 +782,7 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
-                onPressed: () async {
-                  final _CashAccount? newAccount =
-                      await _showCreateCashAccountDialog();
-                  if (!mounted || newAccount == null) {
-                    return;
-                  }
-
-                  setState(() {
-                    _cashAccounts.add(newAccount);
-                    _persistState();
-                  });
-                },
+                onPressed: _handleAddCashAccount,
                 icon: const Icon(Icons.add),
                 label: const Text('Tambah akun kas'),
               ),
@@ -715,6 +872,23 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
   }
 
   Widget _buildDaftarTransaksiTab() {
+    final List<int> monthKeys = _availableMonthKeys();
+    final int effectiveSelectedMonthKey = monthKeys.contains(_selectedMonthKey)
+        ? _selectedMonthKey
+        : monthKeys.first;
+    final int effectiveRangeStartMonthKey =
+        monthKeys.contains(_rangeStartMonthKey)
+        ? _rangeStartMonthKey
+        : monthKeys.last;
+    final int effectiveRangeEndMonthKey = monthKeys.contains(_rangeEndMonthKey)
+        ? _rangeEndMonthKey
+        : monthKeys.first;
+    final List<_TransactionData> filteredTransactions = _filteredTransactions(
+      selectedMonthKey: effectiveSelectedMonthKey,
+      rangeStartMonthKey: effectiveRangeStartMonthKey,
+      rangeEndMonthKey: effectiveRangeEndMonthKey,
+    );
+
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -734,10 +908,101 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
                 context,
               ).textTheme.bodyMedium?.copyWith(color: context.mutedText),
             ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _TransactionFilterType.values
+                  .map(
+                    (_TransactionFilterType filterType) => ChoiceChip(
+                      label: Text(filterType.label),
+                      selected: _selectedTransactionFilter == filterType,
+                      onSelected: (bool isSelected) {
+                        if (!isSelected) {
+                          return;
+                        }
+                        setState(() {
+                          _selectedTransactionFilter = filterType;
+                        });
+                      },
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+            if (_selectedTransactionFilter ==
+                _TransactionFilterType.specificMonth)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: InkWell(
+                  onTap: () =>
+                      _pickSpecificMonth(monthKeys, effectiveSelectedMonthKey),
+                  borderRadius: BorderRadius.circular(12),
+                  child: InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'Pada bulan',
+                      border: OutlineInputBorder(),
+                      suffixIcon: Icon(Icons.calendar_month_outlined),
+                    ),
+                    child: Text(
+                      _formatMonthYear(effectiveSelectedMonthKey),
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                ),
+              ),
+            if (_selectedTransactionFilter == _TransactionFilterType.monthRange)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: InkWell(
+                        onTap: () => _pickRangeStartMonth(
+                          monthKeys,
+                          effectiveRangeStartMonthKey,
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            labelText: 'Dari bulan',
+                            border: OutlineInputBorder(),
+                            suffixIcon: Icon(Icons.calendar_month_outlined),
+                          ),
+                          child: Text(
+                            _formatMonthYear(effectiveRangeStartMonthKey),
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: InkWell(
+                        onTap: () => _pickRangeEndMonth(
+                          monthKeys,
+                          effectiveRangeEndMonthKey,
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            labelText: 'Sampai bulan',
+                            border: OutlineInputBorder(),
+                            suffixIcon: Icon(Icons.calendar_month_outlined),
+                          ),
+                          child: Text(
+                            _formatMonthYear(effectiveRangeEndMonthKey),
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             const SizedBox(height: 20),
             _TransactionSection(
               title: 'Semua Transaksi',
-              transactions: _transactions,
+              transactions: filteredTransactions,
             ),
           ],
         ),
@@ -812,6 +1077,7 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
 
   String? _selectedAccount;
   String? _selectedCategoryId;
+  late DateTime _selectedDate;
 
   @override
   void initState() {
@@ -820,6 +1086,7 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
     _selectedCategoryId = widget.categories.isEmpty
         ? null
         : widget.categories.first.id;
+    _selectedDate = DateTime.now();
   }
 
   @override
@@ -857,8 +1124,34 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
         account: _selectedAccount!,
         category: selectedCategory.name,
         amount: signedAmount,
+        date: DateTime(
+          _selectedDate.year,
+          _selectedDate.month,
+          _selectedDate.day,
+        ),
       ),
     );
+  }
+
+  Future<void> _pickTransactionDate() async {
+    final DateTime initialDate = DateTime(
+      _selectedDate.year,
+      _selectedDate.month,
+      _selectedDate.day,
+    );
+    final DateTime? pickedDate = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100, 12, 31),
+      helpText: 'Pilih tanggal transaksi',
+    );
+    if (pickedDate == null) {
+      return;
+    }
+    setState(() {
+      _selectedDate = pickedDate;
+    });
   }
 
   @override
@@ -896,6 +1189,10 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
             TextFormField(
               controller: _amountController,
               keyboardType: TextInputType.number,
+              inputFormatters: <TextInputFormatter>[
+                FilteringTextInputFormatter.digitsOnly,
+                _ThousandSeparatorInputFormatter(),
+              ],
               decoration: const InputDecoration(
                 labelText: 'Nominal',
                 border: OutlineInputBorder(),
@@ -907,6 +1204,27 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
                 }
                 return null;
               },
+            ),
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: _pickTransactionDate,
+              borderRadius: BorderRadius.circular(12),
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Tanggal transaksi',
+                  border: OutlineInputBorder(),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: <Widget>[
+                    Text(_formatDateForInput(_selectedDate)),
+                    Icon(
+                      Icons.calendar_today_outlined,
+                      color: context.mutedText,
+                    ),
+                  ],
+                ),
+              ),
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
@@ -971,6 +1289,100 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
   }
 }
 
+const List<String> _monthNames = <String>[
+  'Januari',
+  'Februari',
+  'Maret',
+  'April',
+  'Mei',
+  'Juni',
+  'Juli',
+  'Agustus',
+  'September',
+  'Oktober',
+  'November',
+  'Desember',
+];
+
+const List<String> _shortMonthNames = <String>[
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'Mei',
+  'Jun',
+  'Jul',
+  'Agu',
+  'Sep',
+  'Okt',
+  'Nov',
+  'Des',
+];
+
+int _monthKey(DateTime date) => date.year * 100 + date.month;
+
+DateTime _dateFromMonthKey(int monthKey) =>
+    DateTime(monthKey ~/ 100, monthKey % 100);
+
+bool _isSameDay(DateTime first, DateTime second) =>
+    first.year == second.year &&
+    first.month == second.month &&
+    first.day == second.day;
+
+String _monthName(int month) => _monthNames[month - 1];
+
+String _shortMonthName(int month) => _shortMonthNames[month - 1];
+
+String _formatMonthYear(int monthKey) {
+  final DateTime monthDate = _dateFromMonthKey(monthKey);
+  return '${_monthName(monthDate.month)} ${monthDate.year}';
+}
+
+String _formatTransactionDate(DateTime date) {
+  final DateTime localDate = date.toLocal();
+  if (_isSameDay(localDate, DateTime.now())) {
+    return 'Hari ini';
+  }
+  return '${localDate.day} ${_shortMonthName(localDate.month)} ${localDate.year}';
+}
+
+String _formatDateForInput(DateTime date) {
+  final DateTime localDate = date.toLocal();
+  if (_isSameDay(localDate, DateTime.now())) {
+    return 'Hari ini (${localDate.day} ${_monthName(localDate.month)} ${localDate.year})';
+  }
+  return '${localDate.day} ${_monthName(localDate.month)} ${localDate.year}';
+}
+
+String _formatGroupedNumber(String source) {
+  final List<String> chunks = <String>[];
+  for (int i = source.length; i > 0; i -= 3) {
+    final int start = i - 3 < 0 ? 0 : i - 3;
+    chunks.insert(0, source.substring(start, i));
+  }
+  return chunks.join('.');
+}
+
+class _ThousandSeparatorInputFormatter extends TextInputFormatter {
+  const _ThousandSeparatorInputFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final String numericOnly = newValue.text.replaceAll(RegExp(r'[^0-9]'), '');
+    if (numericOnly.isEmpty) {
+      return const TextEditingValue(text: '');
+    }
+    final String formatted = _formatGroupedNumber(numericOnly);
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
+}
+
 int? _parsePositiveWholeNumber(String? value) {
   if (value == null) {
     return null;
@@ -997,15 +1409,8 @@ int? _parseNonNegativeWholeNumber(String? value) {
   return int.tryParse(numericOnly);
 }
 
-String _formatWholeCurrency(int value) {
-  final String source = value.toString();
-  final List<String> chunks = <String>[];
-  for (int i = source.length; i > 0; i -= 3) {
-    final int start = i - 3 < 0 ? 0 : i - 3;
-    chunks.insert(0, source.substring(start, i));
-  }
-  return 'Rp ${chunks.join('.')}';
-}
+String _formatWholeCurrency(int value) =>
+    'Rp ${_formatGroupedNumber(value.toString())}';
 
 String _formatSignedCurrency(int value) {
   if (value < 0) {
@@ -1014,40 +1419,61 @@ String _formatSignedCurrency(int value) {
   return _formatWholeCurrency(value);
 }
 
-class _HeaderSection extends StatelessWidget {
+String _greetingForHour(int hour) {
+  if (hour >= 4 && hour < 11) {
+    return 'Selamat pagi';
+  }
+  if (hour >= 11 && hour < 15) {
+    return 'Selamat siang';
+  }
+  if (hour >= 15 && hour < 18) {
+    return 'Selamat sore';
+  }
+  return 'Selamat malam';
+}
+
+class _HeaderSection extends StatefulWidget {
   const _HeaderSection();
+
+  @override
+  State<_HeaderSection> createState() => _HeaderSectionState();
+}
+
+class _HeaderSectionState extends State<_HeaderSection> {
+  late DateTime _now;
+  Timer? _timeTicker;
+
+  @override
+  void initState() {
+    super.initState();
+    _now = DateTime.now();
+    _timeTicker = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _now = DateTime.now();
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _timeTicker?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final TextTheme textTheme = Theme.of(context).textTheme;
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              'Selamat pagi, Duo',
-              style: textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Keuanganmu lagi rapi hari ini.',
-              style: textTheme.bodyMedium?.copyWith(color: context.mutedText),
-            ),
-          ],
+        Text(
+          '${_greetingForHour(_now.hour)}, Duo',
+          style: textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
         ),
-        Row(
-          children: <Widget>[
-            CircleAvatar(
-              radius: 22,
-              backgroundColor: context.gradientStart,
-              child: Icon(Icons.person, color: context.scheme.onPrimary),
-            ),
-          ],
-        ),
+        const SizedBox(height: 4),
       ],
     );
   }
@@ -1088,7 +1514,6 @@ class _BalanceCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: <Widget>[
               Text(
                 'TOTAL SALDO',
@@ -1098,7 +1523,6 @@ class _BalanceCard extends StatelessWidget {
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              Icon(Icons.visibility, color: context.subtleOnPrimary),
             ],
           ),
           const SizedBox(height: 12),
@@ -1172,22 +1596,22 @@ class _MetricItem extends StatelessWidget {
 }
 
 class _AccountCarousel extends StatelessWidget {
-  const _AccountCarousel({required this.accounts});
+  const _AccountCarousel({required this.accounts, required this.onAddPressed});
 
   final List<_AccountBalanceData> accounts;
+  final VoidCallback onAddPressed;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 140,
+      height: 180,
       child: ListView(
         scrollDirection: Axis.horizontal,
-        children: accounts
-            .map(
-              (_AccountBalanceData account) =>
-                  _AccountCard(name: account.name, balance: account.balance),
-            )
-            .toList(growable: false),
+        children: <Widget>[
+          for (final _AccountBalanceData account in accounts)
+            _AccountCard(name: account.name, balance: account.balance),
+          _AddAccountCard(onPressed: onAddPressed),
+        ],
       ),
     );
   }
@@ -1209,57 +1633,264 @@ class _AccountCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final TextTheme textTheme = Theme.of(context).textTheme;
+    final Color onCardColor = context.scheme.onPrimary;
+    final Color negativeBalanceColor = const Color(0xFFFFDADA);
+
     return Container(
       width: 220,
       margin: const EdgeInsets.only(right: 16),
-      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
-        color: context.cardBackground,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[
+            context.gradientStart,
+            Color.lerp(context.gradientEnd, Colors.black, 0.25) ??
+                context.gradientEnd,
+          ],
+        ),
+        border: Border.all(color: onCardColor.withValues(alpha: 0.15)),
         boxShadow: <BoxShadow>[
           BoxShadow(
-            color: context.shadow.withValues(alpha: 0.12),
-            blurRadius: 8,
+            color: context.shadow.withValues(alpha: 0.28),
+            blurRadius: 14,
+            offset: const Offset(0, 8),
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Text(
-            name,
-            style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-          ),
-          const Spacer(),
-          Text(
-            _formatSignedCurrency(balance),
-            style: textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.w700,
-              color: balance < 0 ? context.scheme.error : null,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: Stack(
+          children: <Widget>[
+            Positioned(
+              right: -8,
+              top: -12,
+              child: Text(
+                'DG',
+                style: textTheme.displaySmall?.copyWith(
+                  color: onCardColor.withValues(alpha: 0.14),
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -2,
+                ),
+              ),
             ),
-          ),
-        ],
+            Positioned(
+              right: -42,
+              bottom: -44,
+              child: Container(
+                width: 120,
+                height: 120,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: onCardColor.withValues(alpha: 0.08),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: <Widget>[
+                      Icon(
+                        Icons.contactless,
+                        color: onCardColor.withValues(alpha: 0.8),
+                        size: 17,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    width: 36,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(6),
+                      color: onCardColor.withValues(alpha: 0.22),
+                      border: Border.all(
+                        color: onCardColor.withValues(alpha: 0.36),
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: onCardColor,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _formatSignedCurrency(balance),
+                    style: textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: balance < 0 ? negativeBalanceColor : onCardColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _InsightSection extends StatelessWidget {
-  const _InsightSection();
+class _AddAccountCard extends StatelessWidget {
+  const _AddAccountCard({required this.onPressed});
+
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
     final TextTheme textTheme = Theme.of(context).textTheme;
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        color: context.cardBackground,
+      width: 220,
+      margin: const EdgeInsets.only(right: 16),
+      child: OutlinedButton(
+        onPressed: onPressed,
+        style: OutlinedButton.styleFrom(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(Icons.add_circle_outline, color: context.scheme.primary),
+            const SizedBox(height: 8),
+            Text(
+              'Tambah akun kas',
+              style: textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Geser untuk lihat kartu lain',
+              style: textTheme.bodySmall?.copyWith(color: context.mutedText),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
       ),
-      child: Text(
-        'Pengeluaran minggu ini naik 65% untuk kategori makan dibanding minggu lalu.',
-        style: textTheme.bodyMedium,
+    );
+  }
+}
+
+class _MonthPickerDialog extends StatefulWidget {
+  const _MonthPickerDialog({
+    required this.initialMonth,
+    required this.firstMonth,
+    required this.lastMonth,
+  });
+
+  final DateTime initialMonth;
+  final DateTime firstMonth;
+  final DateTime lastMonth;
+
+  @override
+  State<_MonthPickerDialog> createState() => _MonthPickerDialogState();
+}
+
+class _MonthPickerDialogState extends State<_MonthPickerDialog> {
+  late int _visibleYear;
+
+  @override
+  void initState() {
+    super.initState();
+    _visibleYear = widget.initialMonth.year;
+  }
+
+  bool get _canGoToPreviousYear => _visibleYear > widget.firstMonth.year;
+
+  bool get _canGoToNextYear => _visibleYear < widget.lastMonth.year;
+
+  bool _isMonthEnabled(int month) {
+    final int monthKey = _monthKey(DateTime(_visibleYear, month));
+    return monthKey >= _monthKey(widget.firstMonth) &&
+        monthKey <= _monthKey(widget.lastMonth);
+  }
+
+  bool _isSelectedMonth(int month) =>
+      _visibleYear == widget.initialMonth.year &&
+      month == widget.initialMonth.month;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Pilih bulan'),
+      content: SizedBox(
+        width: 320,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: <Widget>[
+                IconButton(
+                  onPressed: _canGoToPreviousYear
+                      ? () {
+                          setState(() {
+                            _visibleYear -= 1;
+                          });
+                        }
+                      : null,
+                  icon: const Icon(Icons.chevron_left),
+                ),
+                Text(
+                  '$_visibleYear',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                IconButton(
+                  onPressed: _canGoToNextYear
+                      ? () {
+                          setState(() {
+                            _visibleYear += 1;
+                          });
+                        }
+                      : null,
+                  icon: const Icon(Icons.chevron_right),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: List<Widget>.generate(12, (int index) {
+                final int month = index + 1;
+                final bool isEnabled = _isMonthEnabled(month);
+                return ChoiceChip(
+                  label: Text(_shortMonthName(month)),
+                  selected: _isSelectedMonth(month),
+                  onSelected: isEnabled
+                      ? (_) {
+                          Navigator.of(
+                            context,
+                          ).pop(DateTime(_visibleYear, month));
+                        }
+                      : null,
+                );
+              }),
+            ),
+          ],
+        ),
       ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Batal'),
+        ),
+      ],
     );
   }
 }
@@ -1304,18 +1935,21 @@ class _TransactionData {
     required this.account,
     required this.category,
     required this.amount,
+    required this.date,
   });
 
   final String title;
   final String account;
   final String category;
   final int amount;
+  final DateTime date;
 
   Map<String, Object> toJson() => <String, Object>{
     'title': title,
     'account': account,
     'category': category,
     'amount': amount,
+    'date': date.toIso8601String(),
   };
 
   static _TransactionData? fromJson(Map<String, dynamic> json) {
@@ -1323,6 +1957,10 @@ class _TransactionData {
     final String? account = json['account'] as String?;
     final String? category = json['category'] as String?;
     final int? amount = json['amount'] as int?;
+    final String? dateRaw = json['date'] as String?;
+    final DateTime parsedDate = dateRaw == null
+        ? DateTime.now()
+        : DateTime.tryParse(dateRaw)?.toLocal() ?? DateTime.now();
     if (title == null ||
         account == null ||
         category == null ||
@@ -1334,11 +1972,13 @@ class _TransactionData {
       account: account,
       category: category,
       amount: amount,
+      date: parsedDate,
     );
   }
 
   bool get isExpense => amount < 0;
-  String get subtitle => '$account - $category - Hari ini';
+  String get subtitle =>
+      '$account - $category - ${_formatTransactionDate(date)}';
   String get formattedAmount =>
       '${isExpense ? '-' : '+'}${_formatWholeCurrency(amount.abs())}';
 }
@@ -1412,49 +2052,85 @@ class _BottomNavBar extends StatelessWidget {
       color: context.cardBackground,
       surfaceTintColor: context.cardBackground,
       child: SizedBox(
-        height: 60,
+        height: 72,
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: <Widget>[
-            IconButton(
-              onPressed: () => onTap(0),
-              tooltip: 'Ringkasan',
-              icon: Icon(
-                Icons.dashboard,
-                color: selectedIndex == 0
-                    ? context.scheme.primary
-                    : context.scheme.onSurfaceVariant,
+            Expanded(
+              child: _BottomNavItem(
+                icon: Icons.dashboard,
+                label: 'Dashboard',
+                selected: selectedIndex == 0,
+                onTap: () => onTap(0),
               ),
             ),
-            IconButton(
-              onPressed: () => onTap(1),
-              tooltip: 'Daftar transaksi',
-              icon: Icon(
-                Icons.receipt_long,
-                color: selectedIndex == 1
-                    ? context.scheme.primary
-                    : context.scheme.onSurfaceVariant,
+            Expanded(
+              child: _BottomNavItem(
+                icon: Icons.receipt_long,
+                label: 'Transaksi',
+                selected: selectedIndex == 1,
+                onTap: () => onTap(1),
               ),
             ),
-            const SizedBox(width: 40),
-            IconButton(
-              onPressed: () => onTap(2),
-              tooltip: 'Pengaturan kas',
-              icon: Icon(
-                Icons.account_balance_wallet_outlined,
-                color: selectedIndex == 2
-                    ? context.scheme.primary
-                    : context.scheme.onSurfaceVariant,
+            const SizedBox(width: 56),
+            Expanded(
+              child: _BottomNavItem(
+                icon: Icons.account_balance_wallet_outlined,
+                label: 'Kas',
+                selected: selectedIndex == 2,
+                onTap: () => onTap(2),
               ),
             ),
-            IconButton(
-              onPressed: () => onTap(3),
-              tooltip: 'Pengaturan kategori',
-              icon: Icon(
-                Icons.category_outlined,
-                color: selectedIndex == 3
-                    ? context.scheme.primary
-                    : context.scheme.onSurfaceVariant,
+            Expanded(
+              child: _BottomNavItem(
+                icon: Icons.category_outlined,
+                label: 'Kategori',
+                selected: selectedIndex == 3,
+                onTap: () => onTap(3),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BottomNavItem extends StatelessWidget {
+  const _BottomNavItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextTheme textTheme = Theme.of(context).textTheme;
+    final Color itemColor = selected
+        ? context.scheme.primary
+        : context.scheme.onSurfaceVariant;
+
+    return InkWell(
+      onTap: onTap,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(icon, color: itemColor, size: 20),
+            const SizedBox(height: 1),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: textTheme.labelSmall?.copyWith(
+                color: itemColor,
+                fontSize: 10,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
           ],

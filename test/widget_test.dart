@@ -7,7 +7,17 @@ void main() {
   testWidgets('Dashboard renders core sections', (WidgetTester tester) async {
     await tester.pumpWidget(const DgMonApp());
 
-    expect(find.text('Selamat pagi, Duo'), findsOneWidget);
+    final List<String> possibleGreetings = <String>[
+      'Selamat pagi, Duo',
+      'Selamat siang, Duo',
+      'Selamat sore, Duo',
+      'Selamat malam, Duo',
+    ];
+    final bool hasGreeting = possibleGreetings.any(
+      (String greeting) => find.text(greeting).evaluate().isNotEmpty,
+    );
+
+    expect(hasGreeting, isTrue);
     expect(find.text('TOTAL SALDO'), findsOneWidget);
     expect(find.text('Transaksi Terbaru'), findsOneWidget);
   });
