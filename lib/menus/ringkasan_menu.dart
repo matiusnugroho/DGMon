@@ -36,6 +36,7 @@ extension _RingkasanMenuX on _FinanceDashboardPageState {
             _TransactionSection(
               title: 'Transaksi Terbaru',
               transactions: recentTransactions,
+              onEditTransaction: _handleEditTransaction,
             ),
           ],
         ),

@@ -274,6 +274,7 @@ extension _TransaksiMenuX on _FinanceDashboardPageState {
             _TransactionSection(
               title: 'Semua Transaksi',
               transactions: filteredTransactions,
+              onEditTransaction: _handleEditTransaction,
             ),
           ],
         ),
@@ -394,10 +395,15 @@ class _MonthPickerDialogState extends State<_MonthPickerDialog> {
 }
 
 class _TransactionSection extends StatelessWidget {
-  const _TransactionSection({required this.title, required this.transactions});
+  const _TransactionSection({
+    required this.title,
+    required this.transactions,
+    required this.onEditTransaction,
+  });
 
   final String title;
   final List<_TransactionData> transactions;
+  final ValueChanged<_TransactionData> onEditTransaction;
 
   @override
   Widget build(BuildContext context) {
@@ -424,6 +430,13 @@ class _TransactionSection extends StatelessWidget {
             subtitle: transaction.subtitle,
             amount: transaction.formattedAmount,
             isExpense: transaction.isExpense,
+            onActionSelected: (_TransactionItemMenuAction action) {
+              switch (action) {
+                case _TransactionItemMenuAction.editTransaction:
+                  onEditTransaction(transaction);
+                  return;
+              }
+            },
           ),
       ],
     );
@@ -490,12 +503,14 @@ class _TransactionItem extends StatelessWidget {
     required this.subtitle,
     required this.amount,
     required this.isExpense,
+    required this.onActionSelected,
   });
 
   final String title;
   final String subtitle;
   final String amount;
   final bool isExpense;
+  final ValueChanged<_TransactionItemMenuAction> onActionSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -576,13 +591,43 @@ class _TransactionItem extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          Text(
-            amount,
-            style: textTheme.titleMedium?.copyWith(
-              color: amountColor,
-              fontWeight: FontWeight.w700,
-              fontSize: 17,
-            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Text(
+                amount,
+                style: textTheme.titleMedium?.copyWith(
+                  color: amountColor,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 17,
+                ),
+              ),
+              PopupMenuButton<_TransactionItemMenuAction>(
+                tooltip: 'Aksi transaksi',
+                color: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                icon: Icon(
+                  Icons.more_vert_rounded,
+                  color: context.mutedText,
+                  size: 20,
+                ),
+                onSelected: onActionSelected,
+                itemBuilder: (BuildContext context) =>
+                    <PopupMenuEntry<_TransactionItemMenuAction>>[
+                      PopupMenuItem<_TransactionItemMenuAction>(
+                        value: _TransactionItemMenuAction.editTransaction,
+                        child: _SettingsMenuItemRow(
+                          icon: Icons.edit_outlined,
+                          label: _TransactionItemMenuAction
+                              .editTransaction
+                              .label,
+                        ),
+                      ),
+                    ],
+              ),
+            ],
           ),
         ],
       ),

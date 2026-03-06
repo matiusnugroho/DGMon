@@ -49,6 +49,14 @@ extension _TransactionMenuActionX on _TransactionMenuAction {
   };
 }
 
+enum _TransactionItemMenuAction { editTransaction }
+
+extension _TransactionItemMenuActionX on _TransactionItemMenuAction {
+  String get label => switch (this) {
+    _TransactionItemMenuAction.editTransaction => 'Edit transaksi',
+  };
+}
+
 enum _CashAccountMenuAction {
   viewTransactions,
   editAccount,
@@ -1300,18 +1308,7 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
       return;
     }
 
-    final _TransactionData? newTransaction =
-        await showModalBottomSheet<_TransactionData>(
-          context: context,
-          isScrollControlled: true,
-          backgroundColor: context.cardBackground,
-          builder: (_) => _AddTransactionSheet(
-            accounts: _cashAccounts
-                .map((_CashAccount account) => account.name)
-                .toList(growable: false),
-            categories: _categories,
-          ),
-        );
+    final _TransactionData? newTransaction = await _showTransactionSheet();
 
     if (!mounted || newTransaction == null) {
       return;
@@ -1326,6 +1323,48 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
       _selectedMonthKey = _monthKey(newTransaction.date);
       _persistState();
     });
+  }
+
+  Future<_TransactionData?> _showTransactionSheet({
+    _TransactionData? initialTransaction,
+  }) {
+    return showModalBottomSheet<_TransactionData>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: context.cardBackground,
+      builder: (_) => _TransactionSheet(
+        accounts: _cashAccounts
+            .map((_CashAccount account) => account.name)
+            .toList(growable: false),
+        categories: _categories,
+        initialTransaction: initialTransaction,
+      ),
+    );
+  }
+
+  Future<void> _handleEditTransaction(_TransactionData transaction) async {
+    final int currentIndex = _transactions.indexOf(transaction);
+    if (currentIndex == -1) {
+      return;
+    }
+
+    final _TransactionData? editedTransaction = await _showTransactionSheet(
+      initialTransaction: transaction,
+    );
+    if (!mounted || editedTransaction == null) {
+      return;
+    }
+
+    final int resolvedIndex = _transactions.indexOf(transaction);
+    if (resolvedIndex == -1) {
+      return;
+    }
+
+    setState(() {
+      _transactions[resolvedIndex] = editedTransaction;
+      _persistState();
+    });
+    _showSnack('Transaksi berhasil diperbarui.');
   }
 
   @override
@@ -1375,20 +1414,22 @@ class _FinanceDashboardPageState extends State<FinanceDashboardPage> {
   }
 }
 
-class _AddTransactionSheet extends StatefulWidget {
-  const _AddTransactionSheet({
+class _TransactionSheet extends StatefulWidget {
+  const _TransactionSheet({
     required this.accounts,
     required this.categories,
+    this.initialTransaction,
   });
 
   final List<String> accounts;
   final List<_CategoryData> categories;
+  final _TransactionData? initialTransaction;
 
   @override
-  State<_AddTransactionSheet> createState() => _AddTransactionSheetState();
+  State<_TransactionSheet> createState() => _TransactionSheetState();
 }
 
-class _AddTransactionSheetState extends State<_AddTransactionSheet> {
+class _TransactionSheetState extends State<_TransactionSheet> {
   final TextEditingController _titleController = TextEditingController();
   final TextEditingController _amountController = TextEditingController();
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
@@ -1400,11 +1441,32 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
   @override
   void initState() {
     super.initState();
-    _selectedAccount = widget.accounts.isEmpty ? null : widget.accounts.first;
-    _selectedCategoryId = widget.categories.isEmpty
+    final _TransactionData? initialTransaction = widget.initialTransaction;
+    _selectedAccount =
+        initialTransaction != null &&
+            widget.accounts.contains(initialTransaction.account)
+        ? initialTransaction.account
+        : (widget.accounts.isEmpty ? null : widget.accounts.first);
+    final _CategoryData? selectedCategory = initialTransaction == null
         ? null
-        : widget.categories.first.id;
-    _selectedDate = DateTime.now();
+        : widget.categories.cast<_CategoryData?>().firstWhere(
+            (_CategoryData? category) =>
+                category?.name == initialTransaction.category,
+            orElse: () => null,
+          );
+    _selectedCategoryId = selectedCategory?.id ??
+        (widget.categories.isEmpty ? null : widget.categories.first.id);
+    _selectedDate = initialTransaction == null
+        ? DateTime.now()
+        : DateTime(
+            initialTransaction.date.year,
+            initialTransaction.date.month,
+            initialTransaction.date.day,
+          );
+    _titleController.text = initialTransaction?.title ?? '';
+    _amountController.text = initialTransaction == null
+        ? ''
+        : _formatGroupedNumber(initialTransaction.amount.abs().toString());
   }
 
   @override
@@ -1474,6 +1536,7 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isEditing = widget.initialTransaction != null;
     final double bottomInset = MediaQuery.of(context).viewInsets.bottom;
     return Padding(
       padding: EdgeInsets.fromLTRB(20, 20, 20, bottomInset + 20),
@@ -1484,7 +1547,7 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Text(
-              'Tambah Transaksi',
+              isEditing ? 'Edit Transaksi' : 'Tambah Transaksi',
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
@@ -1597,7 +1660,7 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
               width: double.infinity,
               child: FilledButton(
                 onPressed: _saveTransaction,
-                child: const Text('Simpan'),
+                child: Text(isEditing ? 'Simpan perubahan' : 'Simpan'),
               ),
             ),
           ],
